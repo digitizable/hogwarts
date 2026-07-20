@@ -101,10 +101,13 @@ class HandsetPage(Gtk.Box):
         side.append(side_lab)
 
         self._stack = Gtk.Stack()
+        self._stack.add_css_class("handset-stack")
         self._stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
         self._stack.set_transition_duration(160)
         self._stack.set_hexpand(True)
         self._stack.set_vexpand(True)
+        self._stack.set_halign(Gtk.Align.FILL)
+        self._stack.set_valign(Gtk.Align.FILL)
 
         meta = self._store.load()
         self._channel = ChannelPanel(
@@ -155,6 +158,10 @@ class HandsetPage(Gtk.Box):
 
         self._nav_group: Gtk.ToggleButton | None = None
         for key, label, icon, widget in nav_items:
+            widget.set_hexpand(True)
+            widget.set_vexpand(True)
+            widget.set_halign(Gtk.Align.FILL)
+            widget.set_valign(Gtk.Align.FILL)
             self._stack.add_named(widget, key)
             btn = Gtk.ToggleButton()
             btn.add_css_class("handset-nav-btn")

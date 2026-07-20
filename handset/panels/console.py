@@ -57,7 +57,13 @@ class ConsolePanel(Gtk.Box):
         scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
         scroll.set_hexpand(True)
         scroll.set_vexpand(True)
-        scroll.set_min_content_height(280)
+        scroll.set_halign(Gtk.Align.FILL)
+        scroll.set_valign(Gtk.Align.FILL)
+        try:
+            scroll.set_propagate_natural_height(False)
+        except Exception:
+            pass
+        scroll.set_min_content_height(160)
         self.view = Gtk.TextView()
         self.view.set_editable(False)
         self.view.set_cursor_visible(False)

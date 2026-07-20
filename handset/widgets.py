@@ -38,7 +38,25 @@ def kv_row(key: str) -> tuple[Gtk.Widget, Gtk.Label]:
 
 
 def scroll_panel(body: Gtk.Widget) -> Gtk.ScrolledWindow:
+    """Full-bleed panel scroller — must expand or GTK allocates a tiny viewport."""
     scroll = Gtk.ScrolledWindow()
     scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+    scroll.set_hexpand(True)
+    scroll.set_vexpand(True)
+    scroll.set_halign(Gtk.Align.FILL)
+    scroll.set_valign(Gtk.Align.FILL)
+    # Use the stack allocation; do not size to full content height (clips parent).
+    try:
+        scroll.set_propagate_natural_height(False)
+        scroll.set_propagate_natural_width(False)
+    except Exception:
+        pass
+    # Floor so a glitchy parent still shows more than a few pixels.
+    try:
+        scroll.set_min_content_height(200)
+    except Exception:
+        pass
+    if hasattr(body, "set_hexpand"):
+        body.set_hexpand(True)
     scroll.set_child(body)
     return scroll

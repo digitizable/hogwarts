@@ -45,6 +45,10 @@ HANDSET_CSS = b"""
   min-width: 200px;
   padding: 12px 10px;
 }
+.handset-stack {
+  min-height: 0;
+  min-width: 0;
+}
 .handset-nav-btn {
   border-radius: 10px;
   min-height: 40px;
@@ -67,6 +71,7 @@ HANDSET_CSS = b"""
 .handset-main {
   background-color: #111111;
   min-width: 0;
+  min-height: 0;
 }
 .handset-panel {
   padding: 20px 24px 28px 24px;
