@@ -48,8 +48,11 @@ class PlanePanel(Gtk.Box):
         self.base_url.set_text(cfg.base_url)
         card.append(field("Base URL", self.base_url))
 
-        self.api_token = Gtk.PasswordEntry()
-        self.api_token.set_show_peek_icon(True)
+        # Gtk.PasswordEntry has no set_placeholder_text (only a GObject prop);
+        # Entry + visibility=False is portable and supports placeholders.
+        self.api_token = Gtk.Entry()
+        self.api_token.set_visibility(False)
+        self.api_token.set_input_purpose(Gtk.InputPurpose.PASSWORD)
         self.api_token.set_placeholder_text("Bearer token (optional if open API)")
         self.api_token.set_text(cfg.api_token)
         card.append(field("API token", self.api_token))
