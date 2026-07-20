@@ -63,9 +63,25 @@ GET /api/v1/agents/{id}
 
 ```
 POST /api/v1/agents/{id}/tasks
-Body: { "type": "shell|file|…", "payload": { … } }
-→ 202 { "task_id": "tsk_…", "status": "queued" }
+Body: {
+  "type": "shell|ping|note|…",
+  "payload": { … },
+  "client_request_id": "uuid-optional"
+}
+→ 202 { "task_id": "tsk_…", "status": "queued", "created": "…Z" }
 ```
+
+Minimal `type` values for v1: `shell`, `ping`, `note`. Prefer async queue + result events over interactive PTY.
+
+```
+GET /api/v1/agents/{id}/tasks?limit=50
+→ 200 { "tasks": [ { "id", "type", "status", "created", "updated", "result"? } ] }
+
+GET /api/v1/tasks/{task_id}
+→ 200 { "task": { … } }
+```
+
+Task `status`: `queued` | `assigned` | `running` | `succeeded` | `failed` | `cancelled`.
 
 ---
 
