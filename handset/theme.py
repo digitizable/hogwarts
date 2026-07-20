@@ -1,0 +1,257 @@
+"""Inline CSS for Handset (plugin-local; does not depend on Reach CSS)."""
+
+from __future__ import annotations
+
+import gi
+
+gi.require_version("Gtk", "4.0")
+gi.require_version("Gdk", "4.0")
+from gi.repository import Gdk, Gtk  # noqa: E402
+
+HANDSET_CSS = b"""
+.handset-page {
+  background-color: #111111;
+  color: #e8e8e8;
+}
+.handset-header {
+  background-color: #0d0d0d;
+  border-bottom: 1px solid #222222;
+  padding: 10px 16px;
+  min-height: 44px;
+}
+.handset-title {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #f0f0f0;
+}
+.handset-sub {
+  font-size: 0.82rem;
+  color: #8a8a8a;
+}
+.handset-banner {
+  background-color: #1a1814;
+  border: 1px solid #3d3520;
+  border-radius: 10px;
+  padding: 10px 12px;
+  color: #c9b27a;
+  font-size: 0.82rem;
+}
+.handset-split {
+  min-height: 0;
+}
+.handset-sidebar {
+  background-color: #0f0f0f;
+  border-right: 1px solid #222;
+  min-width: 200px;
+  padding: 12px 10px;
+}
+.handset-nav-btn {
+  border-radius: 10px;
+  min-height: 40px;
+  padding: 0 12px;
+  margin: 2px 0;
+  background: transparent;
+  color: #a0a0a0;
+  border: 1px solid transparent;
+}
+.handset-nav-btn:hover {
+  background-color: #161616;
+  color: #e0e0e0;
+}
+.handset-nav-btn:checked,
+.handset-nav-btn:active {
+  background-color: #1a1a1c;
+  color: #e8e8e8;
+  border-color: #2a2a2e;
+}
+.handset-main {
+  background-color: #111111;
+  min-width: 0;
+}
+.handset-panel {
+  padding: 20px 24px 28px 24px;
+}
+.handset-hero {
+  background: linear-gradient(145deg, #161a22 0%, #12141a 55%, #0e1014 100%);
+  border: 1px solid #2a3140;
+  border-radius: 14px;
+  padding: 16px 18px;
+}
+.handset-hero-title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #6a7a94;
+}
+.handset-hero-state {
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: #f2f2f2;
+}
+.handset-hero-meta {
+  font-size: 0.88rem;
+  color: #a8b0c0;
+  font-family: monospace;
+}
+.handset-dot {
+  min-width: 10px;
+  min-height: 10px;
+  border-radius: 99px;
+  background-color: #555;
+}
+.handset-dot-live {
+  background-color: #5fbf70;
+  box-shadow: 0 0 8px rgba(95, 191, 112, 0.45);
+}
+.handset-dot-idle {
+  background-color: #707070;
+}
+.handset-dot-busy {
+  background-color: #6aa3e8;
+  box-shadow: 0 0 8px rgba(106, 163, 232, 0.4);
+}
+.handset-dot-off {
+  background-color: #e86a6a;
+}
+.handset-card {
+  background-color: #161616;
+  border: 1px solid #262626;
+  border-radius: 12px;
+  padding: 14px 16px;
+}
+.handset-card-title {
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #707070;
+  margin-bottom: 2px;
+}
+.handset-kv-key {
+  font-size: 0.75rem;
+  color: #666;
+  font-weight: 600;
+  min-width: 72px;
+}
+.handset-kv-val {
+  font-size: 0.88rem;
+  color: #d4d4d4;
+  font-family: monospace;
+}
+.handset-field-label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #8a8a8a;
+}
+.handset-section {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: #5a5a5a;
+}
+.handset-muted {
+  color: #8a8a8a;
+  font-size: 0.85rem;
+}
+.handset-probe-row {
+  background-color: #141414;
+  border: 1px solid #222;
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin: 4px 0;
+}
+.handset-probe-label {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: #e0e0e0;
+}
+.handset-probe-target {
+  font-size: 0.78rem;
+  color: #707070;
+  font-family: monospace;
+}
+.handset-ok {
+  color: #8fd19e;
+  font-weight: 700;
+  font-size: 0.8rem;
+}
+.handset-fail {
+  color: #e89a9a;
+  font-weight: 700;
+  font-size: 0.8rem;
+}
+.handset-log {
+  font-family: monospace;
+  font-size: 0.8rem;
+  color: #b0b8c8;
+  background-color: #0c0c0c;
+  border: 1px solid #222;
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+.handset-chip {
+  font-size: 0.7rem;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 2px 8px;
+  background-color: #222;
+  color: #9a9a9a;
+}
+.handset-chip-live {
+  background-color: #1a2a1c;
+  color: #8fd19e;
+}
+.handset-chip-plane {
+  background-color: #1a2230;
+  color: #8ab4f8;
+}
+.handset-action-grid {
+  margin-top: 4px;
+}
+.handset-agent-row {
+  background-color: #141414;
+  border: 1px solid #222;
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin: 4px 0;
+}
+.handset-agent-row:hover {
+  border-color: #333;
+  background-color: #161616;
+}
+.handset-agent-host {
+  font-size: 0.98rem;
+  font-weight: 700;
+  color: #f0f0f0;
+}
+.handset-agent-meta {
+  font-size: 0.8rem;
+  color: #8a8a8a;
+  font-family: monospace;
+}
+.handset-status-online { color: #8fd19e; font-weight: 700; font-size: 0.78rem; }
+.handset-status-idle { color: #c9b27a; font-weight: 700; font-size: 0.78rem; }
+.handset-status-offline { color: #e89a9a; font-weight: 700; font-size: 0.78rem; }
+.handset-status-unknown { color: #8a8a8a; font-weight: 700; font-size: 0.78rem; }
+.handset-console-input {
+  font-family: monospace;
+  font-size: 0.9rem;
+}
+"""
+
+
+def apply_css(widget: Gtk.Widget) -> None:
+    try:
+        provider = Gtk.CssProvider()
+        provider.load_from_data(HANDSET_CSS)
+        display = Gdk.Display.get_default()
+        if display is not None:
+            Gtk.StyleContext.add_provider_for_display(
+                display,
+                provider,
+                Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
+            )
+    except Exception:
+        pass
