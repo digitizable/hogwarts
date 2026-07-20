@@ -11,9 +11,12 @@ import gi
 gi.require_version("Gtk", "4.0")
 from gi.repository import Gtk  # noqa: E402
 
+from handset.banner import banner, banner_short
+
 _HELP = """Commands:
   help              Show this help
-  clear             Clear the console buffer
+  banner            Show Handset ASCII splash
+  clear             Clear the console (reprints short mark)
   echo <text>       Print text
   time              Local + UTC time
   status            Path + plane summary
@@ -94,7 +97,10 @@ class ConsolePanel(Gtk.Box):
         entry_row.append(go)
         self.append(entry_row)
 
-        self.append_out("Handset console ready. Type help.")
+        self._show_boot_banner()
+
+    def _show_boot_banner(self) -> None:
+        self.append_out(banner())
 
     def append_out(self, text: str) -> None:
         buf = self.view.get_buffer()
@@ -127,8 +133,12 @@ class ConsolePanel(Gtk.Box):
         if cmd == "help":
             self.append_out(_HELP.strip())
             return
+        if cmd in ("banner", "splash", "logo"):
+            self.append_out(banner())
+            return
         if cmd == "clear":
             self.view.get_buffer().set_text("")
+            self.append_out(banner_short())
             return
         if cmd == "echo":
             self.append_out(" ".join(rest))
