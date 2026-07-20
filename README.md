@@ -1,7 +1,7 @@
 # Hogwarts
 
 <p align="center">
-  <img src="icon.png" alt="Hogwarts" width="128" height="128"/>
+  <img src="https://raw.githubusercontent.com/digitizable/reach-plugin-hogwarts/main/icon.png?v=noshadow" alt="Hogwarts" width="128" height="128"/>
 </p>
 
 <p align="center">
@@ -26,8 +26,6 @@ In Reach → **Plugins** marketplace:
 ```text
 digitizable/reach-plugin-hogwarts
 ```
-
-If GitHub still uses an older repo path, try `digitizable/reach-plugin-malbork` or `digitizable/reach-plugin-handset` until redirects settle.
 
 Requires Reach ≥ 0.5.
 
