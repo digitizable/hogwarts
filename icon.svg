@@ -1,33 +1,32 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Handset official mark — full color in marketplace (edge-to-edge). -->
-<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" fill="none">
+<!-- Malbork — concentric keep mark (full color, marketplace). Named for Malbork Castle. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="128" y2="128" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#1a2744"/>
-      <stop offset="1" stop-color="#0d1528"/>
+    <linearGradient id="brick" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#c45c3e"/>
+      <stop offset="55%" stop-color="#8b3a2a"/>
+      <stop offset="100%" stop-color="#5c2418"/>
     </linearGradient>
-    <linearGradient id="arc" x1="28" y1="28" x2="100" y2="100" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#5b9dff"/>
-      <stop offset="1" stop-color="#3d7aef"/>
-    </linearGradient>
-    <linearGradient id="beam" x1="64" y1="64" x2="108" y2="28" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#7ec8ff" stop-opacity="0.95"/>
-      <stop offset="1" stop-color="#5b9dff" stop-opacity="0.12"/>
+    <linearGradient id="sky" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1a2230"/>
+      <stop offset="100%" stop-color="#0e1218"/>
     </linearGradient>
   </defs>
-  <!-- Full bleed plate (fills marketplace badge edge-to-edge) -->
-  <rect width="128" height="128" rx="28" fill="url(#bg)"/>
-  <rect x="1" y="1" width="126" height="126" rx="27" stroke="#2a3d66" stroke-width="2"/>
-  <!-- Radar rings -->
-  <circle cx="64" cy="64" r="42" stroke="url(#arc)" stroke-width="3.5" opacity="0.3"/>
-  <circle cx="64" cy="64" r="29" stroke="url(#arc)" stroke-width="3.5" opacity="0.55"/>
-  <circle cx="64" cy="64" r="16" stroke="url(#arc)" stroke-width="3.5" opacity="0.9"/>
-  <!-- Sweep -->
-  <path d="M64 64 L64 22 A42 42 0 0 1 102 48 Z" fill="url(#beam)"/>
-  <!-- Core -->
-  <circle cx="64" cy="64" r="7" fill="#8fd0ff"/>
-  <circle cx="64" cy="64" r="3.5" fill="#e8f4ff"/>
-  <!-- Blip -->
-  <circle cx="94" cy="38" r="5" fill="#ffb454"/>
-  <circle cx="94" cy="38" r="9" stroke="#ffb454" stroke-width="1.75" opacity="0.4"/>
+  <!-- plate -->
+  <rect x="2" y="2" width="60" height="60" rx="12" fill="url(#sky)"/>
+  <!-- outer curtain wall -->
+  <path fill="url(#brick)" d="M10 48 V28 L16 22 H22 V18 H26 V22 H30 V18 H34 V22 H38 V18 H42 V22 H48 L54 28 V48 Z"/>
+  <!-- battlements -->
+  <path fill="#a34a32" d="M16 22h4v-4h4v4h4v-4h4v4h4v-4h4v4h4v-4h2v6H14v-6h2z"/>
+  <!-- keep -->
+  <rect x="24" y="26" width="16" height="22" fill="#6e2e1e"/>
+  <path fill="#8b3a2a" d="M22 26 L32 16 L42 26 Z"/>
+  <!-- keep windows -->
+  <rect x="28" y="32" width="3" height="5" rx="0.5" fill="#1a1814"/>
+  <rect x="33" y="32" width="3" height="5" rx="0.5" fill="#1a1814"/>
+  <!-- gate -->
+  <path fill="#1a1814" d="M29 40 h6 v8 h-6 z"/>
+  <path fill="#c9b27a" d="M30.5 44 h1 v2 h-1 z" opacity="0.7"/>
+  <!-- moat hint -->
+  <ellipse cx="32" cy="52" rx="20" ry="3" fill="#2a4060" opacity="0.45"/>
 </svg>

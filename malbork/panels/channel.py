@@ -9,7 +9,7 @@ import gi
 gi.require_version("Gtk", "4.0")
 from gi.repository import Gtk  # noqa: E402
 
-from handset.widgets import kv_row, scroll_panel, section_label
+from malbork.widgets import kv_row, scroll_panel, section_label
 
 
 class ChannelPanel(Gtk.Box):
@@ -28,7 +28,7 @@ class ChannelPanel(Gtk.Box):
         self.set_vexpand(True)
 
         body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
-        body.add_css_class("handset-panel")
+        body.add_css_class("malbork-panel")
 
         banner = Gtk.Label(
             label=(
@@ -38,36 +38,36 @@ class ChannelPanel(Gtk.Box):
             wrap=True,
             xalign=0,
         )
-        banner.add_css_class("handset-banner")
+        banner.add_css_class("malbork-banner")
         body.append(banner)
 
         hero = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        hero.add_css_class("handset-hero")
+        hero.add_css_class("malbork-hero")
 
         top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         self.dot = Gtk.Box()
-        self.dot.add_css_class("handset-dot")
-        self.dot.add_css_class("handset-dot-idle")
+        self.dot.add_css_class("malbork-dot")
+        self.dot.add_css_class("malbork-dot-idle")
         self.dot.set_valign(Gtk.Align.CENTER)
         top.append(self.dot)
         ht = Gtk.Label(label="Channel", xalign=0)
-        ht.add_css_class("handset-hero-title")
+        ht.add_css_class("malbork-hero-title")
         ht.set_hexpand(True)
         top.append(ht)
         hero.append(top)
 
         self.state_lab = Gtk.Label(label="—", xalign=0)
-        self.state_lab.add_css_class("handset-hero-state")
+        self.state_lab.add_css_class("malbork-hero-state")
         hero.append(self.state_lab)
 
         self.path_lab = Gtk.Label(label="", xalign=0, wrap=True, selectable=True)
-        self.path_lab.add_css_class("handset-hero-meta")
+        self.path_lab.add_css_class("malbork-hero-meta")
         hero.append(self.path_lab)
         body.append(hero)
 
         body.append(section_label("Path facts"))
         facts = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        facts.add_css_class("handset-card")
+        facts.add_css_class("malbork-card")
         self.fact_socks = kv_row("SOCKS")
         self.fact_hops = kv_row("Hops")
         self.fact_fp = kv_row("Fingerprint")
@@ -86,7 +86,7 @@ class ChannelPanel(Gtk.Box):
         actions.set_homogeneous(True)
         actions.set_column_spacing(8)
         actions.set_row_spacing(8)
-        actions.add_css_class("handset-action-grid")
+        actions.add_css_class("malbork-action-grid")
         for label, cb in (
             ("Copy SOCKS", on_copy_socks),
             ("Run egress", on_run_egress),
@@ -124,17 +124,17 @@ class ChannelPanel(Gtk.Box):
         self.fact_plane[1].set_text(plane)
 
         for cls in (
-            "handset-dot-live",
-            "handset-dot-idle",
-            "handset-dot-busy",
-            "handset-dot-off",
+            "malbork-dot-live",
+            "malbork-dot-idle",
+            "malbork-dot-busy",
+            "malbork-dot-off",
         ):
             self.dot.remove_css_class(cls)
         self.dot.add_css_class(
             {
-                "live": "handset-dot-live",
-                "idle": "handset-dot-idle",
-                "busy": "handset-dot-busy",
-                "off": "handset-dot-off",
-            }.get(state, "handset-dot-idle")
+                "live": "malbork-dot-live",
+                "idle": "malbork-dot-idle",
+                "busy": "malbork-dot-busy",
+                "off": "malbork-dot-off",
+            }.get(state, "malbork-dot-idle")
         )

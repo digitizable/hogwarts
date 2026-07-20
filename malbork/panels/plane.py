@@ -9,8 +9,8 @@ import gi
 gi.require_version("Gtk", "4.0")
 from gi.repository import Gtk  # noqa: E402
 
-from handset.backend.config import PlaneConfig
-from handset.widgets import field, scroll_panel, section_label
+from malbork.backend.config import PlaneConfig
+from malbork.widgets import field, scroll_panel, section_label
 
 
 class PlanePanel(Gtk.Box):
@@ -26,22 +26,22 @@ class PlanePanel(Gtk.Box):
         self.set_vexpand(True)
 
         body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
-        body.add_css_class("handset-panel")
+        body.add_css_class("malbork-panel")
 
         intro = Gtk.Label(
             label=(
-                "Point Handset at your C2 control plane. Only operator credentials "
-                "live here — never implant secrets. See handset/backend/CONTRACT.md."
+                "Point Malbork at your C2 control plane. Only operator credentials "
+                "live here — never implant secrets. See malbork/backend/CONTRACT.md."
             ),
             wrap=True,
             xalign=0,
         )
-        intro.add_css_class("handset-muted")
+        intro.add_css_class("malbork-muted")
         body.append(intro)
 
         body.append(section_label("Connection"))
         card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        card.add_css_class("handset-card")
+        card.add_css_class("malbork-card")
 
         self.base_url = Gtk.Entry()
         self.base_url.set_placeholder_text("https://c2.example.internal")
@@ -76,7 +76,7 @@ class PlanePanel(Gtk.Box):
         body.append(row)
 
         self.result = Gtk.Label(label="", xalign=0, wrap=True, selectable=True)
-        self.result.add_css_class("handset-kv-val")
+        self.result.add_css_class("malbork-kv-val")
         body.append(self.result)
 
         body.append(section_label("API surface"))
@@ -89,7 +89,7 @@ class PlanePanel(Gtk.Box):
             ),
             xalign=0,
         )
-        api.add_css_class("handset-agent-meta")
+        api.add_css_class("malbork-agent-meta")
         body.append(api)
 
         self.append(scroll_panel(body))
@@ -107,9 +107,9 @@ class PlanePanel(Gtk.Box):
 
     def set_result(self, text: str, *, ok: bool | None = None) -> None:
         self.result.set_text(text)
-        self.result.remove_css_class("handset-ok")
-        self.result.remove_css_class("handset-fail")
+        self.result.remove_css_class("malbork-ok")
+        self.result.remove_css_class("malbork-fail")
         if ok is True:
-            self.result.add_css_class("handset-ok")
+            self.result.add_css_class("malbork-ok")
         elif ok is False:
-            self.result.add_css_class("handset-fail")
+            self.result.add_css_class("malbork-fail")

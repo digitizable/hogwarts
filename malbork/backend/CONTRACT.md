@@ -1,11 +1,11 @@
-# Handset — Control plane contract
+# Malbork — Control plane contract
 
-Handset is the **operator desk** inside Reach. Live fleet data comes from a C2
+Malbork is the **operator desk** inside Reach. Live fleet data comes from a C2
 **control-plane API** you host. Until that API is configured, Agents stays empty
 and local tools (channel, egress, listener notes, playbooks) still work.
 
 Config is stored under Reach plugin data:
-`~/.local/share/reach/plugin-data/com__digitizable__handset/plane.json`
+`~/.local/share/reach/plugin-data/com__digitizable__malbork/plane.json`
 
 ---
 
