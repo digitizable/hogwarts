@@ -1,6 +1,7 @@
 # Assets
 
-| File | Notes |
-|------|--------|
-| `icon.svg` | Official Handset mark (original). Full color in Reach marketplace; monochrome-themed in the left rail. |
+| File | Surface |
+|------|---------|
+| `icon.svg` | Marketplace — full color, edge-to-edge plate |
+| `icon-symbolic.svg` | Left rail — white-on-transparent, themed monochrome |
 

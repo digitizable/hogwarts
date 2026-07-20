@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Handset official mark — full color in marketplace; themed monochrome in Reach rail -->
+<!-- Handset official mark — full color in marketplace (edge-to-edge). -->
 <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" fill="none">
   <defs>
-    <linearGradient id="bg" x1="16" y1="12" x2="112" y2="116" gradientUnits="userSpaceOnUse">
+    <linearGradient id="bg" x1="0" y1="0" x2="128" y2="128" gradientUnits="userSpaceOnUse">
       <stop stop-color="#1a2744"/>
       <stop offset="1" stop-color="#0d1528"/>
     </linearGradient>
@@ -12,22 +12,22 @@
     </linearGradient>
     <linearGradient id="beam" x1="64" y1="64" x2="108" y2="28" gradientUnits="userSpaceOnUse">
       <stop stop-color="#7ec8ff" stop-opacity="0.95"/>
-      <stop offset="1" stop-color="#5b9dff" stop-opacity="0.15"/>
+      <stop offset="1" stop-color="#5b9dff" stop-opacity="0.12"/>
     </linearGradient>
   </defs>
-  <!-- Rounded plate -->
-  <rect x="8" y="8" width="112" height="112" rx="28" fill="url(#bg)"/>
-  <rect x="8" y="8" width="112" height="112" rx="28" stroke="#2a3d66" stroke-width="2"/>
+  <!-- Full bleed plate (fills marketplace badge edge-to-edge) -->
+  <rect width="128" height="128" rx="28" fill="url(#bg)"/>
+  <rect x="1" y="1" width="126" height="126" rx="27" stroke="#2a3d66" stroke-width="2"/>
   <!-- Radar rings -->
-  <circle cx="64" cy="64" r="38" stroke="url(#arc)" stroke-width="3" opacity="0.35"/>
-  <circle cx="64" cy="64" r="26" stroke="url(#arc)" stroke-width="3" opacity="0.55"/>
-  <circle cx="64" cy="64" r="14" stroke="url(#arc)" stroke-width="3" opacity="0.85"/>
-  <!-- Sweep wedge -->
-  <path d="M64 64 L64 26 A38 38 0 0 1 98 48 Z" fill="url(#beam)"/>
-  <!-- Core node -->
-  <circle cx="64" cy="64" r="6" fill="#8fd0ff"/>
-  <circle cx="64" cy="64" r="3" fill="#e8f4ff"/>
-  <!-- Accent blip -->
-  <circle cx="90" cy="42" r="4" fill="#ffb454"/>
-  <circle cx="90" cy="42" r="7" stroke="#ffb454" stroke-width="1.5" opacity="0.45"/>
+  <circle cx="64" cy="64" r="42" stroke="url(#arc)" stroke-width="3.5" opacity="0.3"/>
+  <circle cx="64" cy="64" r="29" stroke="url(#arc)" stroke-width="3.5" opacity="0.55"/>
+  <circle cx="64" cy="64" r="16" stroke="url(#arc)" stroke-width="3.5" opacity="0.9"/>
+  <!-- Sweep -->
+  <path d="M64 64 L64 22 A42 42 0 0 1 102 48 Z" fill="url(#beam)"/>
+  <!-- Core -->
+  <circle cx="64" cy="64" r="7" fill="#8fd0ff"/>
+  <circle cx="64" cy="64" r="3.5" fill="#e8f4ff"/>
+  <!-- Blip -->
+  <circle cx="94" cy="38" r="5" fill="#ffb454"/>
+  <circle cx="94" cy="38" r="9" stroke="#ffb454" stroke-width="1.75" opacity="0.4"/>
 </svg>

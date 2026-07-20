@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Handset rail mark — white on transparent; Reach themes monochrome. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none">
+  <circle cx="12" cy="12" r="9" stroke="#ffffff" stroke-width="1.75" opacity="0.35"/>
+  <circle cx="12" cy="12" r="6" stroke="#ffffff" stroke-width="1.75" opacity="0.65"/>
+  <circle cx="12" cy="12" r="3" stroke="#ffffff" stroke-width="1.75"/>
+  <path d="M12 12 L12 3 A9 9 0 0 1 19.8 8.5 Z" fill="#ffffff" opacity="0.35"/>
+  <circle cx="12" cy="12" r="1.4" fill="#ffffff"/>
+  <circle cx="17.5" cy="7" r="1.2" fill="#ffffff"/>
+</svg>
