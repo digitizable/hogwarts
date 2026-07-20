@@ -1,6 +1,6 @@
-# Third-party assets
+# Assets
 
-| File | Source | License |
-|------|--------|---------|
-| `icon.svg` | [Lucide](https://lucide.dev) `radar` icon | [ISC](https://github.com/lucide-icons/lucide/blob/main/LICENSE) |
+| File | Notes |
+|------|--------|
+| `icon.svg` | Official Handset mark (original). Full color in Reach marketplace; monochrome-themed in the left rail. |
 
