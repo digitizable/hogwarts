@@ -3,7 +3,7 @@
 | File | Notes |
 |------|--------|
 | `hogwarts.png` | Marketplace & README — for-grok plate, white bg removed, no drop shadow, 512×512 full-bleed RGBA |
-| `icon-symbolic.svg` | Left rail monochrome — solid castle silhouette from braille art (`hogwarts-ascii.txt`) |
+| `rail.svg` | Left rail monochrome — solid castle silhouette from braille art |
 
 ## Console
 

@@ -19,7 +19,7 @@
     "icon": "network-wireless-symbolic",
     "tooltip": "Hogwarts — C2 keep for Reach",
     "icon_file": "hogwarts.png",
-    "icon_symbolic": "icon-symbolic.svg"
+    "icon_symbolic": "rail.svg"
   },
   "permissions": [
     "path_status",
