@@ -162,36 +162,59 @@ class KeepstreamClient:
                 pass
 
     def _connect_sock(self) -> socket.socket:
-        """Direct TCP or SOCKS5 (path-wrapped Session — Spike 2)."""
-        if self.socks_host and self.socks_port:
-            from hogwarts.net import socks5_connect
+        """Direct TCP or SOCKS5 (path-wrapped Session — Spike 2).
 
-            self.via = f"socks5://{self.socks_host}:{self.socks_port}"
-            self._status(
-                f"Keepstream via path SOCKS {self.socks_host}:{self.socks_port} "
-                f"→ {self.host}:{self.port}…",
-                None,
-            )
-            sock = socks5_connect(
-                self.socks_host,
-                self.socks_port,
-                self.host,
-                self.port,
-                timeout=12.0,
-            )
-        else:
-            self.via = "direct"
-            self._status(f"Keepstream connecting {self.host}:{self.port}…", None)
-            sock = socket.create_connection((self.host, self.port), timeout=8.0)
-        try:
-            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        except Exception:
-            pass
-        try:
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1 << 20)
-        except Exception:
-            pass
-        return sock
+        Retries briefly on connection refused — agent reverse-listen can lag
+        a tick behind session_start result delivery.
+        """
+        last_exc: Exception | None = None
+        attempts = 6
+        for attempt in range(attempts):
+            try:
+                if self.socks_host and self.socks_port:
+                    from hogwarts.net import socks5_connect
+
+                    self.via = f"socks5://{self.socks_host}:{self.socks_port}"
+                    if attempt == 0:
+                        self._status(
+                            f"Keepstream via path SOCKS {self.socks_host}:{self.socks_port} "
+                            f"→ {self.host}:{self.port}…",
+                            None,
+                        )
+                    sock = socks5_connect(
+                        self.socks_host,
+                        self.socks_port,
+                        self.host,
+                        self.port,
+                        timeout=12.0,
+                    )
+                else:
+                    self.via = "direct"
+                    if attempt == 0:
+                        self._status(
+                            f"Keepstream connecting {self.host}:{self.port}…",
+                            None,
+                        )
+                    sock = socket.create_connection(
+                        (self.host, self.port), timeout=8.0
+                    )
+                try:
+                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                except Exception:
+                    pass
+                try:
+                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1 << 20)
+                except Exception:
+                    pass
+                return sock
+            except OSError as exc:
+                last_exc = exc
+                # errno 111 connection refused / 10061 on Windows — retry
+                if attempt + 1 >= attempts:
+                    break
+                time.sleep(0.15 * (attempt + 1))
+        assert last_exc is not None
+        raise last_exc
 
     def _run(self) -> None:
         try:

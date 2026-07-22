@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
 
-VERSION = "0.5.25-lab"
+VERSION = "0.5.26-lab"
 MIN_SLEEP = 0.12  # Control needs sub-200ms check-ins
 # Set by main(); when False, loop only logs enroll/errors/tasks>0 (less disk thrash)
 _AGENT_VERBOSE = False
@@ -1782,9 +1782,17 @@ def _ks_handle_client(conn: Any) -> None:
         if not want_sid or not want_psk or not (ok_sid and ok_psk):
             conn.sendall(b"ERR auth\n")
             return
+        # Advertise *session* output size (max_side scaled), not raw desktop
         sw, sh = _screen_size()
+        try:
+            side = int(_KEEPSTREAM.get("max_side") or 1280)
+            scale = min(1.0, float(side) / max(sw, sh, 1))
+            ow = max(2, int(sw * scale) // 2 * 2)
+            oh = max(2, int(sh * scale) // 2 * 2)
+        except Exception:
+            ow, oh = sw, sh
         aid = str(_KEEPSTREAM.get("agent_id") or "agent")
-        conn.sendall(f"HELLO_OK {aid} {sw} {sh} jpeg\n".encode("utf-8"))
+        conn.sendall(f"HELLO_OK {aid} {ow} {oh} jpeg\n".encode("utf-8"))
         _KEEPSTREAM["clients"] = int(_KEEPSTREAM.get("clients") or 0) + 1
 
         def reader() -> None:

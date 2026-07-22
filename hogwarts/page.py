@@ -2429,13 +2429,20 @@ class HogwartsPage(Gtk.Box):
                     pass
                 ks.start()
                 via = "path SOCKS" if socks_h else "direct"
+                capture = str(res.get("capture") or "").strip() or "?"
+                agent_ver = str(res.get("agent_version") or "").strip()
                 note = (
                     f"Keepstream {host}:{port} · {via} · {sid} · "
-                    f"codec={res.get('codec')}"
+                    f"codec={res.get('codec')} · capture={capture}"
                 )
+                if agent_ver:
+                    note += f" · agent {agent_ver}"
                 self._agents.set_desktop_note(note, ok=True)
                 info = dict(res or {})
                 info["via"] = via
+                info["capture"] = capture
+                if agent_ver:
+                    info["agent_version"] = agent_ver
                 if socks_h:
                     info["socks"] = f"{socks_h}:{socks_p}"
                 self._agents.set_desktop_session_info(info)
