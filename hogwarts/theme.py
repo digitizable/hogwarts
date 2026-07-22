@@ -906,6 +906,13 @@ HOGWARTS_CSS = """
 .rdv-picture {
   background-color: #141414;
 }
+/* Parsec-class Session: host omits pointer — force visible OS cursor via CSS too */
+.rdv-cursor-local {
+  cursor: default;
+}
+.rdv-cursor-none {
+  cursor: none;
+}
 .rdv-statusbar {
   background-color: #007acc;
   padding: 3px 10px;

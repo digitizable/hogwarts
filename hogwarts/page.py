@@ -2486,6 +2486,27 @@ class HogwartsPage(Gtk.Box):
                 def on_status(msg: str, ok: bool | None) -> None:
                     def ui() -> bool:
                         self._agents.set_desktop_note(msg, ok=ok)
+                        # HELLO_OK sets local_cursor — re-show OS pointer now
+                        # (attach often runs before connect; host draw_mouse=0)
+                        if ok is True or (
+                            isinstance(msg, str)
+                            and (
+                                "Keepstream up" in msg
+                                or "local cursor" in msg.lower()
+                            )
+                        ):
+                            try:
+                                dv = getattr(self._agents, "_desktop_viewer", None)
+                                if dv is not None and hasattr(
+                                    dv, "on_keepstream_up"
+                                ):
+                                    dv.on_keepstream_up()
+                                elif dv is not None and hasattr(
+                                    dv, "_apply_session_cursor"
+                                ):
+                                    dv._apply_session_cursor()
+                            except Exception:
+                                pass
                         return False
 
                     GLib.idle_add(ui)
@@ -2525,6 +2546,15 @@ class HogwartsPage(Gtk.Box):
                     socks_host=socks_h,
                     socks_port=socks_p,
                 )
+                # Pre-seed before HELLO so desk never paints "none" over
+                # a host that already omitted the cursor (gaming local_cursor).
+                try:
+                    if bool(res.get("local_cursor")) or str(
+                        res.get("profile") or profile or ""
+                    ).lower() in ("gaming", "gaming-lan"):
+                        ks.local_cursor = True
+                except Exception:
+                    pass
                 self._keepstream = ks
                 # Viewer can send input over Keepstream
                 try:

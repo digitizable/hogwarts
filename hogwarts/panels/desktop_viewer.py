@@ -1132,25 +1132,124 @@ class RemoteDesktopViewer(Gtk.Window):
             lines.append("Session stopped.")
         self.session_lab.set_text("\n".join(lines) if lines else "Session updated.")
 
-    def _apply_session_cursor(self) -> None:
-        """Parsec-class: gaming* uses local OS pointer; balanced hides it (host in-frame)."""
+    def _wants_local_cursor(self) -> bool:
+        """True when host omits pointer in capture — desk MUST show OS cursor."""
         ks = self._keepstream
-        local = False
-        if ks is not None:
-            local = bool(getattr(ks, "local_cursor", False))
-        if not local:
-            try:
-                local = self.current_session_profile() in ("gaming", "gaming-lan")
-            except Exception:
-                local = False
+        if ks is not None and bool(getattr(ks, "local_cursor", False)):
+            return True
         try:
-            self.picture.set_cursor_from_name("default" if local else "none")
+            if self.current_session_profile() in ("gaming", "gaming-lan"):
+                return True
         except Exception:
             pass
+        # session_start result note / flag stashed on attach
+        if bool(getattr(self, "_session_local_cursor", False)):
+            return True
+        return False
+
+    def _set_widget_cursor(self, widget: Gtk.Widget | None, *, local: bool) -> None:
+        """Force a visible system cursor (or hide). Apply on several widgets."""
+        if widget is None:
+            return
+        try:
+            if local:
+                # None = inherit system default (most reliable on GTK4)
+                widget.set_cursor(None)
+                display = widget.get_display()
+                cur = None
+                if display is not None:
+                    try:
+                        # GTK 4.0+: Cursor.new_from_name(name) or (display, name)
+                        cur = Gdk.Cursor.new_from_name("default")
+                    except TypeError:
+                        try:
+                            cur = Gdk.Cursor.new_from_name(display, "default")
+                        except Exception:
+                            cur = None
+                    except Exception:
+                        cur = None
+                if cur is not None:
+                    widget.set_cursor(cur)
+                else:
+                    try:
+                        widget.set_cursor_from_name("default")
+                    except Exception:
+                        pass
+            else:
+                try:
+                    widget.set_cursor_from_name("none")
+                except Exception:
+                    try:
+                        display = widget.get_display()
+                        if display is not None:
+                            nc = Gdk.Cursor.new_from_name("none")
+                            if nc is not None:
+                                widget.set_cursor(nc)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    def _apply_session_cursor(self) -> None:
+        """Parsec-class: gaming* uses local OS pointer; balanced hides it (host in-frame).
+
+        Host gaming capture uses draw_mouse=0 — if we fail to show a local
+        cursor the operator sees **nothing**. Always re-apply on HELLO/up.
+        """
+        local = self._wants_local_cursor()
+        # CSS belt-and-suspenders (GTK theme cursor: none is common elsewhere)
+        try:
+            if local:
+                self.picture.remove_css_class("rdv-cursor-none")
+                self.picture.add_css_class("rdv-cursor-local")
+                if getattr(self, "_scroll", None) is not None:
+                    self._scroll.remove_css_class("rdv-cursor-none")
+                    self._scroll.add_css_class("rdv-cursor-local")
+            else:
+                self.picture.remove_css_class("rdv-cursor-local")
+                self.picture.add_css_class("rdv-cursor-none")
+                if getattr(self, "_scroll", None) is not None:
+                    self._scroll.remove_css_class("rdv-cursor-local")
+                    self._scroll.add_css_class("rdv-cursor-none")
+        except Exception:
+            pass
+        # Picture, scroll, frame, and window — scrolled parents can steal cursor
+        parent = None
+        try:
+            parent = self.picture.get_parent()
+        except Exception:
+            parent = None
+        for w in (self.picture, getattr(self, "_scroll", None), parent, self):
+            self._set_widget_cursor(w, local=local)
+
+    def on_keepstream_up(self) -> None:
+        """Called when HELLO_OK lands (local_cursor flag now reliable)."""
+        self._main_stack.set_visible_child_name("view")
+        self._apply_session_cursor()
+        if self._wants_local_cursor():
+            self._set_status(
+                "Keepstream up — local cursor visible · relative mouse on gaming",
+                ok=True,
+            )
 
     def attach_keepstream(self, client: Any) -> None:
         """Attach a live KeepstreamClient; frames already applied via page callbacks."""
         self._keepstream = client
+        # Pre-seed local_cursor from profile BEFORE HELLO (attach often runs first)
+        try:
+            if self.current_session_profile() in ("gaming", "gaming-lan"):
+                self._session_local_cursor = True
+                if not bool(getattr(client, "local_cursor", False)):
+                    try:
+                        client.local_cursor = True
+                    except Exception:
+                        pass
+            else:
+                self._session_local_cursor = bool(
+                    getattr(client, "local_cursor", False)
+                )
+        except Exception:
+            self._session_local_cursor = True  # safe default: never both-off
         self.live_badge.set_text("SESSION")
         self.live_badge.add_css_class("rdv-badge-live")
         # Show the picture surface (not the setup form) and accept input
@@ -1159,13 +1258,13 @@ class RemoteDesktopViewer(Gtk.Window):
             self._mode_session.set_active(True)
         else:
             self._set_mode("session")
-        # Gaming: local cursor (host capture draw_mouse=0). Balanced: hide local.
+        # Force view again — _set_mode may flip to setup while connected=False
+        self._main_stack.set_visible_child_name("view")
         self._apply_session_cursor()
         # Stop task-poll Live — Keepstream owns frames now
         if self.btn_live.get_active() and self._on_live:
             self.btn_live.set_active(False)
-        local = bool(getattr(client, "local_cursor", False))
-        if local:
+        if self._wants_local_cursor():
             self._set_status(
                 "Keepstream Session — local cursor + relative mouse · input over TCP",
                 ok=True,
@@ -1227,15 +1326,7 @@ class RemoteDesktopViewer(Gtk.Window):
             # Stream frames live in the picture view
             self._main_stack.set_visible_child_name("view")
             if mode == "session" and ks_up:
-                local = bool(getattr(self._keepstream, "local_cursor", False))
-                if not local:
-                    try:
-                        local = self.current_session_profile() in (
-                            "gaming",
-                            "gaming-lan",
-                        )
-                    except Exception:
-                        local = False
+                local = self._wants_local_cursor()
                 if local:
                     self.mode_hint.set_text(
                         "Session (Keepstream): local cursor · relative mouse · "
@@ -1246,10 +1337,12 @@ class RemoteDesktopViewer(Gtk.Window):
                         "Session (Keepstream): host cursor in-frame · "
                         "local pointer hidden · click/drag over TCP"
                     )
+                # Stay on picture view while Session is connected
+                self._main_stack.set_visible_child_name("view")
                 self._apply_session_cursor()
             elif mode == "control":
                 if ks_up:
-                    local = bool(getattr(self._keepstream, "local_cursor", False))
+                    local = self._wants_local_cursor()
                     if local:
                         self.mode_hint.set_text(
                             "Control + Keepstream: local cursor · input over TCP"
