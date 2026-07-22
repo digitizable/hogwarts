@@ -13,13 +13,20 @@ UIPI blocks Medium agents from injecting into Task Manager and other High UI. Ei
 
 ## One-time install (one UAC Yes)
 
-Elevated PowerShell:
+**Use a path with no spaces.** WinPS 5.1 `-File` breaks under profiles like `C:\Users\Paul Beck\…`. Recommended:
 
 ```powershell
-cd <repo>\agent\windows\input-provider
+mkdir C:\HogwartsInputProvider -Force
+copy <repo>\agent\windows\input-provider\* C:\HogwartsInputProvider\
+cd C:\HogwartsInputProvider
+# elevated once:
 .\install-input-provider-task.ps1 -AtLogon
 .\start-input-provider-silent.ps1
 ```
+
+If the repo path has no spaces you can install in-tree instead.
+
+Scripts are **ASCII-only** (avoid en-dashes in comments on WinPS 5.1).
 
 ## agent.json
 
@@ -31,7 +38,9 @@ cd <repo>\agent\windows\input-provider
 }
 ```
 
-Or Remote Viewer → Session → **Use provider** with a custom exec path (prefer pipe).
+Requires agent **≥ 0.5.30-lab** (opens the pipe with `CreateFileW` / `WaitNamedPipeW`). Older agents used CPython `open()`, which can return **ENOENT** even when .NET `NamedPipeClientStream` connects successfully.
+
+Or Remote Viewer → Session → **Use provider** / **Default pipe**.
 
 ## Protocol
 
@@ -46,9 +55,16 @@ Agent → Helper:  BYE\n
 
 ## Verify
 
+```powershell
+schtasks /Run /TN "HogwartsInputProvider"
+Start-Sleep 2
+$c = New-Object System.IO.Pipes.NamedPipeClientStream(".", "hogwarts-input", [IO.Pipes.PipeDirection]::Out)
+$c.Connect(3000); $c.Dispose(); "pipe OK"
+```
+
 1. Helper running (task or `powershell -File HogwartsInputProvider.ps1`).  
-2. Agent online Medium; `session_start` result includes `"input_provider":{"active":true,"kind":"pipe",…}`.  
-3. Control / Session click on Task Manager should work.
+2. Agent online; `session_start` includes `"input_provider":{"active":true,"kind":"pipe",…}`.  
+3. Control / Session click on Task Manager should work if helper is **Highest** IL.
 
 ## Anti-patterns
 
@@ -56,4 +72,6 @@ Agent → Helper:  BYE\n
 |--------|--------|
 | Point `exec` at a self-elevating script | UAC every Session |
 | Helper not running when Session starts | provider connect fails → local inject |
+| Install under a path with spaces | Task `-File` split; helper never listens |
 | Agent already elevated | provider optional; local SendInput can hit High UI |
+| Rely on CPython `open()` only (pre-0.5.30) | ENOENT while .NET Connect works |
