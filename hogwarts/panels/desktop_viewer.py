@@ -2217,15 +2217,16 @@ class RemoteDesktopViewer(Gtk.Window):
             opts["quality"] = 72
             opts["codec"] = "jpeg"  # MJPEG — snappiest on LAN
             opts["local_cursor"] = True
-            # Host pointer in stream as fallback if desk overlay fails
-            opts["draw_mouse"] = True
+            # Desk paints composite arrow — host cursor in stream looks like a
+            # "stuck real cursor" after click (absolute inject leaves it there).
+            opts["draw_mouse"] = False
         elif prof == "gaming":
             opts["max_side"] = min(int(side), 1280)
             opts["fps"] = 60
             opts["quality"] = 72
             opts["codec"] = "h264"
             opts["local_cursor"] = True
-            opts["draw_mouse"] = True
+            opts["draw_mouse"] = False
         elif prof == "quality":
             opts["max_side"] = max(int(side), 1280)
             opts["fps"] = 30
