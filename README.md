@@ -1,7 +1,7 @@
 # Hogwarts
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/digitizable/reach-plugin-hogwarts/main/hogwarts.png?v=3" alt="Hogwarts" width="128"/>
+  <img src="https://raw.githubusercontent.com/digitizable/hogwarts/main/hogwarts.png?v=3" alt="Hogwarts" width="128"/>
 </p>
 
 **Hogwarts** is an optional [Reach](https://github.com/digitizable/reach) plugin for **command-and-control** work: agent tasking, control-plane configuration, listeners, egress checks, and operator playbooks.
@@ -40,7 +40,7 @@ By default Reach requires an **active path** (Connect) before opening Operate pl
 In Reach: **Operate → Plugins** (marketplace):
 
 ```text
-digitizable/reach-plugin-hogwarts
+digitizable/hogwarts
 ```
 
 Enable **Operate** under **Settings → Plugins** if the marketplace rail is hidden.
