@@ -72,6 +72,7 @@ public static class HogwartsInject {
   const uint MOUSEEVENTF_LEFTDOWN = 0x0002, MOUSEEVENTF_LEFTUP = 0x0004;
   const uint MOUSEEVENTF_RIGHTDOWN = 0x0008, MOUSEEVENTF_RIGHTUP = 0x0010;
   const uint MOUSEEVENTF_MIDDLEDOWN = 0x0020, MOUSEEVENTF_MIDDLEUP = 0x0040;
+  const uint MOUSEEVENTF_WHEEL = 0x0800, MOUSEEVENTF_HWHEEL = 0x1000;
   const uint KEYEVENTF_KEYUP = 0x0002;
 
   static int ScreenW() { return Math.Max(1, GetSystemMetrics(0) - 1); }
@@ -91,6 +92,21 @@ public static class HogwartsInject {
     SendInput(1, new[] { inp }, Marshal.SizeOf(typeof(INPUT)));
   }
 
+  static void Wheel(int notches, bool horizontal) {
+    if (notches == 0) return;
+    if (notches > 20) notches = 20;
+    if (notches < -20) notches = -20;
+    var inp = new INPUT();
+    inp.type = INPUT_MOUSE;
+    // mouseData is DWORD; cast signed wheel ticks * 120
+    uint data = unchecked((uint)(notches * 120));
+    inp.U.mi = new MOUSEINPUT {
+      mouseData = data,
+      dwFlags = horizontal ? MOUSEEVENTF_HWHEEL : MOUSEEVENTF_WHEEL
+    };
+    SendInput(1, new[] { inp }, Marshal.SizeOf(typeof(INPUT)));
+  }
+
   static void Key(ushort vk, bool up) {
     var inp = new INPUT();
     inp.type = INPUT_KEYBOARD;
@@ -99,6 +115,10 @@ public static class HogwartsInject {
   }
 
   public static void ApplyEvent(string type, double? fx, double? fy, int? x, int? y, string button, string key, string text) {
+    ApplyEventFull(type, fx, fy, x, y, button, key, text, null, 0);
+  }
+
+  public static void ApplyEventFull(string type, double? fx, double? fy, int? x, int? y, string button, string key, string text, string mods, int delta) {
     int? px = null, py = null;
     if (fx.HasValue || fy.HasValue) {
       double fxx = fx ?? 0.5, fyy = fy ?? 0.5;
@@ -110,11 +130,18 @@ public static class HogwartsInject {
       px = x ?? 0; py = y ?? 0;
     }
     string typ = (type ?? "click").ToLowerInvariant();
-    if ((typ == "move" || typ == "click" || typ == "dblclick" || typ == "down" || typ == "up") && px.HasValue && py.HasValue) {
+    if ((typ == "move" || typ == "click" || typ == "dblclick" || typ == "down" || typ == "up" || typ == "wheel" || typ == "wheel_h" || typ == "hwheel") && px.HasValue && py.HasValue) {
       Mouse(0, px, py);
       SetCursorPos(px.Value, py.Value);
     }
     if (typ == "move") return;
+    if (typ == "wheel" || typ == "wheel_h" || typ == "hwheel") {
+      int d = delta;
+      if (d == 0) d = 0;
+      int notch = d > 0 ? 1 : (d < 0 ? -1 : 0);
+      if (notch != 0) Wheel(notch, typ == "wheel_h" || typ == "hwheel");
+      return;
+    }
     uint down = MOUSEEVENTF_LEFTDOWN, upf = MOUSEEVENTF_LEFTUP;
     string btn = (button ?? "left").ToLowerInvariant();
     if (btn == "right") { down = MOUSEEVENTF_RIGHTDOWN; upf = MOUSEEVENTF_RIGHTUP; }
@@ -156,14 +183,36 @@ public static class HogwartsInject {
         case "delete": code = 0x2E; break;
         case "home": code = 0x24; break;
         case "end": code = 0x23; break;
+        case "page_up": case "prior": code = 0x21; break;
+        case "page_down": case "next": code = 0x22; break;
+        case "insert": code = 0x2D; break;
         default:
-          if (k.Length == 1) {
+          if (k.Length >= 2 && k[0] == 'f') {
+            int fn;
+            if (int.TryParse(k.Substring(1), out fn) && fn >= 1 && fn <= 12)
+              code = (ushort)(0x70 + fn - 1);
+          } else if (k.Length == 1) {
             short vk = VkKeyScanW(k[0]);
             if (vk != -1) code = (ushort)(vk & 0xFF);
           }
           break;
       }
-      if (code != 0) { Key(code, false); Key(code, true); }
+      // Optional mods: "ctrl,alt,shift,super"
+      var modVks = new System.Collections.Generic.List<ushort>();
+      if (!string.IsNullOrEmpty(mods)) {
+        foreach (var part in mods.Split(new[] { ',', ' ', '+' }, StringSplitOptions.RemoveEmptyEntries)) {
+          var m = part.Trim().ToLowerInvariant();
+          if (m == "ctrl" || m == "control" || m == "ctl") modVks.Add(0x11);
+          else if (m == "alt" || m == "menu") modVks.Add(0x12);
+          else if (m == "shift") modVks.Add(0x10);
+          else if (m == "super" || m == "win" || m == "meta" || m == "cmd") modVks.Add(0x5B);
+        }
+      }
+      if (code != 0) {
+        foreach (var mv in modVks) Key(mv, false);
+        Key(code, false); Key(code, true);
+        for (int i = modVks.Count - 1; i >= 0; i--) Key(modVks[i], true);
+      }
     }
   }
 }
@@ -197,8 +246,20 @@ function Invoke-Events($obj) {
         $button = [string]$ev.button
         $key = [string]$ev.key
         $text = [string]$ev.text
+        $mods = $null
+        if ($null -ne $ev.mods) {
+            if ($ev.mods -is [System.Array]) { $mods = ($ev.mods -join ",") }
+            else { $mods = [string]$ev.mods }
+        } elseif ($null -ne $ev.modifiers) {
+            if ($ev.modifiers -is [System.Array]) { $mods = ($ev.modifiers -join ",") }
+            else { $mods = [string]$ev.modifiers }
+        }
+        $delta = 0
+        if ($null -ne $ev.delta) { try { $delta = [int]$ev.delta } catch { $delta = 0 } }
+        elseif ($null -ne $ev.dy) { try { $delta = [int]$ev.dy } catch { $delta = 0 } }
+        elseif ($null -ne $ev.dx) { try { $delta = [int]$ev.dx } catch { $delta = 0 } }
         try {
-            [HogwartsInject]::ApplyEvent($type, $fx, $fy, $x, $y, $button, $key, $text)
+            [HogwartsInject]::ApplyEventFull($type, $fx, $fy, $x, $y, $button, $key, $text, $mods, $delta)
             $n++
         } catch {
             Write-Log "inject error: $($_.Exception.Message)"

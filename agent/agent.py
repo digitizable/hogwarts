@@ -45,7 +45,7 @@ except ImportError:  # pragma: no cover
     from keepstream.server import session_stop as _ks_session_stop
 
 
-VERSION = "0.5.55-lab"
+VERSION = "0.5.56-lab"
 # Keepstream VIDEO codec byte (matches research keepstream-v0)
 _KS_CODEC_JPEG = 1
 _KS_CODEC_H264 = 2
@@ -2139,9 +2139,11 @@ def _process_elevated() -> bool | None:
 def _desktop_input(payload: dict[str, Any]) -> dict[str, Any]:
     """Inject mouse/keyboard for Remote Viewer Control mode.
 
-    Event types: move | rmove | click | dblclick | down | up | key | type | wheel
+    Event types: move | rmove | click | dblclick | down | up | key | type |
+    wheel | wheel_h
     Position: fx/fy in [0,1] of primary screen, or absolute x/y pixels.
     Relative: rmove with dx/dy host pixels (Parsec-class gaming).
+    Key mods: optional ``mods`` list: ctrl, alt, shift, super.
 
     If a user ``input_provider`` plug-in is active, events are forwarded to it
     (operator-supplied elevated helper). Otherwise local SendInput/xdotool.
@@ -2268,13 +2270,18 @@ def _desktop_input(payload: dict[str, Any]) -> dict[str, Any]:
             inp.ii.mi = MOUSEINPUT(int(dx), int(dy), 0, MOUSEEVENTF_MOVE, 0, None)
             user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
 
-        def send_wheel(delta: int) -> None:
-            # WHEEL_DELTA = 120
+        def send_wheel(delta: int, *, horizontal: bool = False) -> None:
+            # WHEEL_DELTA = 120; mouseData is signed DWORD
             MOUSEEVENTF_WHEEL = 0x0800
+            MOUSEEVENTF_HWHEEL = 0x1000
+            flag = MOUSEEVENTF_HWHEEL if horizontal else MOUSEEVENTF_WHEEL
+            notches = max(-20, min(20, int(delta)))
+            if notches == 0:
+                return
             inp = INPUT()
             inp.type = INPUT_MOUSE
-            d = int(delta) * 120
-            inp.ii.mi = MOUSEINPUT(0, 0, d & 0xFFFFFFFF, MOUSEEVENTF_WHEEL, 0, None)
+            d = notches * 120
+            inp.ii.mi = MOUSEINPUT(0, 0, d & 0xFFFFFFFF, flag, 0, None)
             user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
 
         def send_key(vk: int, up: bool = False) -> None:
@@ -2282,6 +2289,35 @@ def _desktop_input(payload: dict[str, Any]) -> dict[str, Any]:
             inp.type = INPUT_KEYBOARD
             inp.ii.ki = KEYBDINPUT(vk & 0xFF, 0, KEYEVENTF_KEYUP if up else 0, 0, None)
             user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
+
+        def place_cursor() -> None:
+            """Move host pointer under reported fx/fy before click/wheel."""
+            if not xy:
+                return
+            x0, y0 = int(xy[0]), int(xy[1])
+            user32.SetCursorPos(x0, y0)
+            win_input._last_pos = (x0, y0)  # type: ignore[attr-defined]
+
+        def mod_vks(mods: list[str]) -> list[int]:
+            out: list[int] = []
+            for m in mods:
+                ml = str(m).lower()
+                if ml in ("ctrl", "control", "ctl"):
+                    out.append(0x11)  # VK_CONTROL
+                elif ml in ("alt", "menu"):
+                    out.append(0x12)  # VK_MENU
+                elif ml in ("shift",):
+                    out.append(0x10)  # VK_SHIFT
+                elif ml in ("super", "win", "meta", "cmd"):
+                    out.append(0x5B)  # VK_LWIN
+            # de-dupe preserve order
+            seen: set[int] = set()
+            uniq: list[int] = []
+            for v in out:
+                if v not in seen:
+                    seen.add(v)
+                    uniq.append(v)
+            return uniq
 
         if typ in ("rmove", "rel", "relative"):
             try:
@@ -2294,13 +2330,17 @@ def _desktop_input(payload: dict[str, Any]) -> dict[str, Any]:
             dy = max(-400, min(400, dy))
             send_mouse_rel(dx, dy)
             return
-        if typ == "wheel":
+        if typ in ("wheel", "wheel_h", "hwheel"):
             try:
-                delta = int(ev.get("delta") or ev.get("dy") or 0)
+                delta = int(ev.get("delta") or ev.get("dy") or ev.get("dx") or 0)
             except (TypeError, ValueError):
                 delta = 0
+            place_cursor()  # scroll the window under the pointer
             if delta:
-                send_wheel(1 if delta > 0 else -1)
+                send_wheel(
+                    1 if delta > 0 else -1,
+                    horizontal=typ in ("wheel_h", "hwheel"),
+                )
             return
         if typ == "move" and xy:
             # Pixel-quantize + SetCursorPos only (no SendInput ABSOLUTE).
@@ -2313,10 +2353,7 @@ def _desktop_input(payload: dict[str, Any]) -> dict[str, Any]:
             user32.SetCursorPos(x0, y0)
             return
         if typ in ("click", "dblclick", "down", "up"):
-            if xy:
-                x0, y0 = int(xy[0]), int(xy[1])
-                user32.SetCursorPos(x0, y0)
-                win_input._last_pos = (x0, y0)  # type: ignore[attr-defined]
+            place_cursor()
             btn = str(ev.get("button") or "left").lower()
             if btn == "right":
                 down_flag, up_flag = MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP
@@ -2389,9 +2426,28 @@ def _desktop_input(payload: dict[str, Any]) -> dict[str, Any]:
             code = vk_map.get(key)
             if code is None and len(key) == 1:
                 code = user32.VkKeyScanW(ord(key)) & 0xFF
+            raw_mods = ev.get("mods") or ev.get("modifiers") or []
+            if isinstance(raw_mods, str):
+                raw_mods = [m.strip() for m in raw_mods.split(",") if m.strip()]
+            mods = [str(m) for m in raw_mods] if isinstance(raw_mods, list) else []
+            # Boolean shortcuts from desk
+            for flag, name in (
+                ("ctrl", "ctrl"),
+                ("control", "ctrl"),
+                ("alt", "alt"),
+                ("shift", "shift"),
+                ("super", "super"),
+            ):
+                if ev.get(flag):
+                    mods.append(name)
+            m_vks = mod_vks(mods)
             if code:
+                for vk in m_vks:
+                    send_key(vk, up=False)
                 send_key(code, up=False)
                 send_key(code, up=True)
+                for vk in reversed(m_vks):
+                    send_key(vk, up=True)
 
     def linux_input(ev: dict[str, Any]) -> None:
         if not shutil.which("xdotool"):
@@ -2412,13 +2468,21 @@ def _desktop_input(payload: dict[str, Any]) -> dict[str, Any]:
                     timeout=2,
                 )
             return
-        if typ == "wheel":
+        if typ in ("wheel", "wheel_h", "hwheel"):
             try:
-                delta = int(ev.get("delta") or ev.get("dy") or 0)
+                delta = int(ev.get("delta") or ev.get("dy") or ev.get("dx") or 0)
             except (TypeError, ValueError):
                 delta = 0
+            if xy:
+                subprocess.check_call(
+                    ["xdotool", "mousemove", str(xy[0]), str(xy[1])],
+                    timeout=2,
+                )
             if delta:
-                btn = "4" if delta > 0 else "5"
+                if typ in ("wheel_h", "hwheel"):
+                    btn = "7" if delta > 0 else "6"  # right / left
+                else:
+                    btn = "4" if delta > 0 else "5"  # up / down
                 subprocess.check_call(["xdotool", "click", btn], timeout=2)
             return
         if typ == "move" and xy:
@@ -2474,11 +2538,44 @@ def _desktop_input(payload: dict[str, Any]) -> dict[str, Any]:
                     "left": "Left",
                     "right": "Right",
                     "delete": "Delete",
+                    "home": "Home",
+                    "end": "End",
+                    "page_up": "Page_Up",
+                    "page_down": "Page_Down",
+                    "insert": "Insert",
                 }
                 k = kmap.get(key.lower(), key)
-                subprocess.check_call(
-                    ["xdotool", "key", "--clearmodifiers", k], timeout=3
-                )
+                raw_mods = ev.get("mods") or ev.get("modifiers") or []
+                if isinstance(raw_mods, str):
+                    raw_mods = [m.strip() for m in raw_mods.split(",") if m.strip()]
+                mods = [str(m).lower() for m in raw_mods] if isinstance(raw_mods, list) else []
+                for flag, name in (
+                    ("ctrl", "ctrl"),
+                    ("control", "ctrl"),
+                    ("alt", "alt"),
+                    ("shift", "shift"),
+                    ("super", "super"),
+                ):
+                    if ev.get(flag):
+                        mods.append(name)
+                prefix = []
+                for m in mods:
+                    if m in ("ctrl", "control", "ctl"):
+                        prefix.append("ctrl")
+                    elif m == "alt":
+                        prefix.append("alt")
+                    elif m == "shift":
+                        prefix.append("shift")
+                    elif m in ("super", "win", "meta", "cmd"):
+                        prefix.append("super")
+                chord = "+".join(prefix + [k]) if prefix else k
+                # clearmodifiers only when no explicit mods (avoid wiping them)
+                if prefix:
+                    subprocess.check_call(["xdotool", "key", chord], timeout=3)
+                else:
+                    subprocess.check_call(
+                        ["xdotool", "key", "--clearmodifiers", k], timeout=3
+                    )
 
     for raw in raw_events[:32]:
         if not isinstance(raw, dict):

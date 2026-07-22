@@ -698,6 +698,27 @@ class RemoteDesktopViewer(Gtk.Window):
         rclick.connect("pressed", on_right)
         self.picture.add_controller(rclick)
 
+        # Middle click in Control mode
+        mclick = Gtk.GestureClick()
+        mclick.set_button(2)
+
+        def on_middle(
+            _g: Gtk.GestureClick, n_press: int, x: float, y: float
+        ) -> None:
+            if not self._accepts_remote_input() or self._pixbuf is None:
+                return
+            frac = self._widget_xy_to_frac(self.picture, x, y)
+            if frac is None:
+                return
+            fx, fy = frac
+            self._queue_input(
+                {"type": "click", "fx": fx, "fy": fy, "button": "middle"}
+            )
+            self._flush_input(force=True)
+
+        mclick.connect("pressed", on_middle)
+        self.picture.add_controller(mclick)
+
         # Hover move: absolute fx/fy — rate-limited + deadzone to stop host
         # cursor jitter (double SetCursorPos + sub-pixel flip-flop).
         motion = Gtk.EventControllerMotion()
@@ -758,28 +779,6 @@ class RemoteDesktopViewer(Gtk.Window):
         motion.connect("enter", on_enter)
         self.picture.add_controller(motion)
 
-        scroll_c = Gtk.EventControllerScroll()
-        scroll_c.set_flags(Gtk.EventControllerScrollFlags.VERTICAL)
-
-        def on_scroll(
-            _c: Gtk.EventControllerScroll, _dx: float, dy: float
-        ) -> bool:
-            if self._accepts_remote_input():
-                # Forward wheel to host (games zoom / menus)
-                delta = 1 if dy < 0 else (-1 if dy > 0 else 0)
-                if delta:
-                    self._queue_input({"type": "wheel", "delta": delta})
-                    self._flush_input(force=True)
-                return True
-            if dy < 0:
-                self._nudge_zoom(1)
-            elif dy > 0:
-                self._nudge_zoom(-1)
-            return True
-
-        scroll_c.connect("scroll", on_scroll)
-        self.picture.add_controller(scroll_c)
-
         # Stream surface: picture + connecting overlay (covers any residual still)
         self._stream_overlay = Gtk.Overlay()
         self._stream_overlay.set_hexpand(True)
@@ -789,6 +788,8 @@ class RemoteDesktopViewer(Gtk.Window):
         self._texture_cursor = None
         self._use_texture_cursor = False
         self._overlay_cursor_on = False
+        self._wheel_acc_y = 0.0
+        self._wheel_acc_x = 0.0
 
         self.empty_lab = Gtk.Label(
             label="Click Stream for live video\nor Capture for a screenshot",
@@ -816,6 +817,99 @@ class RemoteDesktopViewer(Gtk.Window):
         self._scroll.set_child(frame)
         self._scroll.add_css_class("rdv-scroll")
         main.append(self._scroll)
+
+        # Scroll wheel: CAPTURE on scrolled surface so GTK ScrolledWindow
+        # does not steal wheel for local pan/zoom while controlling the host.
+        def _forward_wheel(dx: float, dy: float) -> bool:
+            """Map GTK scroll deltas → host wheel notches. Return True if handled."""
+            if self._accepts_remote_input():
+                # GTK: dy>0 = finger/content down; Windows WHEEL_DELTA up is positive
+                self._wheel_acc_y += -float(dy or 0.0)
+                self._wheel_acc_x += float(dx or 0.0)
+                # Build under-cursor position so the correct window scrolls
+                pos: dict[str, Any] = {}
+                frac = getattr(self, "_cursor_frac", None)
+                if isinstance(frac, tuple) and len(frac) == 2:
+                    pos = {"fx": float(frac[0]), "fy": float(frac[1])}
+                sent = False
+                # Discrete notches (~1.0 unit); trackpads accumulate smoothly
+                while self._wheel_acc_y >= 1.0:
+                    self._wheel_acc_y -= 1.0
+                    self._queue_input({"type": "wheel", "delta": 1, **pos})
+                    sent = True
+                while self._wheel_acc_y <= -1.0:
+                    self._wheel_acc_y += 1.0
+                    self._queue_input({"type": "wheel", "delta": -1, **pos})
+                    sent = True
+                while self._wheel_acc_x >= 1.0:
+                    self._wheel_acc_x -= 1.0
+                    self._queue_input({"type": "wheel_h", "delta": 1, **pos})
+                    sent = True
+                while self._wheel_acc_x <= -1.0:
+                    self._wheel_acc_x += 1.0
+                    self._queue_input({"type": "wheel_h", "delta": -1, **pos})
+                    sent = True
+                # Discrete mouse wheels often deliver |dy|≈1 per tick already
+                if not sent and (abs(float(dy or 0)) > 1e-6 or abs(float(dx or 0)) > 1e-6):
+                    if abs(float(dy or 0)) >= abs(float(dx or 0)):
+                        d = 1 if float(dy) < 0 else -1
+                        self._queue_input({"type": "wheel", "delta": d, **pos})
+                        self._wheel_acc_y = 0.0
+                    else:
+                        d = 1 if float(dx) > 0 else -1
+                        self._queue_input({"type": "wheel_h", "delta": d, **pos})
+                        self._wheel_acc_x = 0.0
+                    sent = True
+                if sent:
+                    self._flush_input(force=True)
+                return True
+            # Watch: vertical scroll zooms the picture
+            if dy < 0:
+                self._nudge_zoom(1)
+            elif dy > 0:
+                self._nudge_zoom(-1)
+            return True
+
+        # BOTH_AXES (no DISCRETE) so mouse wheels and trackpads both deliver
+        try:
+            scroll_flags = Gtk.EventControllerScrollFlags.BOTH_AXES
+        except Exception:
+            scroll_flags = Gtk.EventControllerScrollFlags.VERTICAL
+        try:
+            scroll_c = Gtk.EventControllerScroll()
+            scroll_c.set_flags(scroll_flags)
+        except Exception:
+            scroll_c = Gtk.EventControllerScroll()
+            scroll_c.set_flags(Gtk.EventControllerScrollFlags.VERTICAL)
+
+        def on_scroll(
+            _c: Gtk.EventControllerScroll, dx: float, dy: float
+        ) -> bool:
+            return _forward_wheel(dx, dy)
+
+        scroll_c.connect("scroll", on_scroll)
+        try:
+            scroll_c.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        except Exception:
+            pass
+        # Capture on ScrolledWindow so it cannot pan instead of remote wheel
+        self._scroll.add_controller(scroll_c)
+        # Also on picture (bubble) as a backup when capture phase is unavailable
+        scroll_c2 = Gtk.EventControllerScroll()
+        try:
+            scroll_c2.set_flags(scroll_flags)
+        except Exception:
+            scroll_c2.set_flags(Gtk.EventControllerScrollFlags.VERTICAL)
+
+        def on_scroll2(
+            _c: Gtk.EventControllerScroll, dx: float, dy: float
+        ) -> bool:
+            if self._accepts_remote_input():
+                return _forward_wheel(dx, dy)
+            return False  # let capture controller / zoom path handle Watch
+
+        scroll_c2.connect("scroll", on_scroll2)
+        self.picture.add_controller(scroll_c2)
 
         # Main content is always the picture (no separate setup page)
         self._main_stack = Gtk.Stack()
@@ -906,23 +1000,45 @@ class RemoteDesktopViewer(Gtk.Window):
         def _forward_key_to_remote(keyval: int, state: Gdk.ModifierType) -> bool:
             """Send a keystroke to the host; never trigger local zoom/focus/archive.
 
-            Printable chars use type=text (proper shift via agent VkKeyScan).
-            Named keys (arrows, F-keys, Escape, …) use type=key.
+            Printable chars (no Ctrl/Alt) use type=text (Shift via agent VkKeyScan).
+            Named keys + Ctrl/Alt chords use type=key with mods.
             """
-            # Ctrl+Alt desk chords stay local (handled by caller)
             name = (Gdk.keyval_name(keyval) or "").lower()
-            # Prefer unicode for typing (handles Shift+number punctuation, etc.)
+            ctrl = bool(state & Gdk.ModifierType.CONTROL_MASK)
+            alt = bool(state & Gdk.ModifierType.ALT_MASK)
+            shift = bool(state & Gdk.ModifierType.SHIFT_MASK)
+            super_m = bool(
+                state & getattr(Gdk.ModifierType, "SUPER_MASK", 0)
+                or state & getattr(Gdk.ModifierType, "META_MASK", 0)
+            )
+            mods: list[str] = []
+            if ctrl:
+                mods.append("ctrl")
+            if alt:
+                mods.append("alt")
+            if shift:
+                mods.append("shift")
+            if super_m:
+                mods.append("super")
+
+            # Prefer unicode for plain typing (Shift+number punctuation, etc.)
+            # Skip when Ctrl/Alt held so Ctrl+C / Alt+F4 reach the host correctly.
             try:
                 uc = Gdk.keyval_to_unicode(keyval)
             except Exception:
                 uc = 0
-            if uc and 32 <= uc < 0x10FFFF:
+            if (
+                not ctrl
+                and not alt
+                and not super_m
+                and uc
+                and 32 <= uc < 0x10FFFF
+            ):
                 ch = chr(uc)
-                # Skip pure control chars; Space is 32 and is fine
                 if ch.isprintable() or ch == " ":
                     self._send_input([{"type": "type", "text": ch}])
                     return True
-            # Named / special keys
+            # Named / special keys + modified letters
             aliases = {
                 "return": "return",
                 "kp_enter": "return",
@@ -948,6 +1064,9 @@ class RemoteDesktopViewer(Gtk.Window):
                 key_name = key_name[3]  # KP_0..9
             if key_name.startswith("f") and key_name[1:].isdigit():
                 pass  # f1..f12
+            # Ctrl/Alt + letter often arrives as "c" / "C" — normalize
+            if len(key_name) == 1 and key_name.isalpha():
+                key_name = key_name.lower()
             if not key_name or key_name in (
                 "shift_l",
                 "shift_r",
@@ -965,7 +1084,12 @@ class RemoteDesktopViewer(Gtk.Window):
             ):
                 # Modifiers alone: still consume so they don't hit local UI
                 return True
-            self._send_input([{"type": "key", "key": key_name}])
+            ev: dict[str, Any] = {"type": "key", "key": key_name}
+            if mods:
+                # Drop shift when agent will get a named non-letter key and
+                # shift was only for capitalization (already handled above).
+                ev["mods"] = mods
+            self._send_input([ev])
             return True
 
         def on_key(
@@ -1635,12 +1759,12 @@ class RemoteDesktopViewer(Gtk.Window):
         ks_up = bool(ks is not None and getattr(ks, "connected", False))
         et = str(event.get("type") or "")
         # Immediate path for hover + typing (no GLib delay)
-        if ks_up and et in ("move", "rmove", "wheel", "key", "type"):
+        if ks_up and et in ("move", "rmove", "wheel", "wheel_h", "key", "type"):
             try:
                 if et == "move" and not self._input_queue:
                     ks.send_input([event])
                     return
-                if et in ("rmove", "wheel", "key", "type"):
+                if et in ("rmove", "wheel", "wheel_h", "key", "type"):
                     ks.send_input([event])
                     return
             except Exception:
