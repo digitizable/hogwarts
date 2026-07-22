@@ -138,8 +138,10 @@ class RemoteDesktopViewer(Gtk.Window):
         self._live_interval_sec = 1.0  # float seconds; Control drops to 0.5
         self._keepstream: Any = None  # KeepstreamClient when Session connected
         self._last_motion_xy: tuple[float, float] | None = None
+        self._cursor_frac: tuple[float, float] | None = None  # 0..1 on remote frame
         self._rel_mouse = False  # Parsec-class relative mouse (gaming Session)
         self._overlay_cursor_on = False  # drawn pointer (system cursor is unreliable)
+        self._cursor_repaint_src: int | None = None
 
         safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in agent_id)[:48]
         if archive_dir:
@@ -628,6 +630,17 @@ class RemoteDesktopViewer(Gtk.Window):
         motion = Gtk.EventControllerMotion()
 
         def on_motion(_c: Gtk.EventControllerMotion, x: float, y: float) -> None:
+            # Cursor tracking is independent of input accept / throttle — otherwise
+            # the pointer never moves (and looked "invisible" when system cursor
+            # was also none).
+            if self._pixbuf is not None:
+                frac = self._widget_xy_to_frac(self.picture, x, y)
+                if frac is not None:
+                    self._cursor_frac = frac
+                self._last_motion_xy = (x, y)
+                self._move_overlay_cursor(x, y)
+                self._schedule_cursor_repaint()
+
             if (
                 not self._accepts_remote_input()
                 or self._pixbuf is None
@@ -654,9 +667,6 @@ class RemoteDesktopViewer(Gtk.Window):
             if now - self._last_move_flush < min_dt:
                 return
             self._last_move_flush = now
-
-            # Always drive the drawn overlay pointer (system cursor is unreliable)
-            self._move_overlay_cursor(x, y)
 
             if self._rel_mouse:
                 # Relative mouse in host pixels (Parsec-class aim)
@@ -2364,10 +2374,103 @@ class RemoteDesktopViewer(Gtk.Window):
             smaller = [s for s in scales if s < cur - 1e-6]
             self._set_zoom(smaller[-1] if smaller else scales[0])
 
+    def _schedule_cursor_repaint(self) -> None:
+        """Coalesce cursor-only repaints (~60 Hz) when stream is quiet."""
+        if not self._wants_local_cursor():
+            return
+        if self._cursor_repaint_src is not None:
+            return
+
+        def _tick() -> bool:
+            self._cursor_repaint_src = None
+            try:
+                self._render()
+            except Exception:
+                pass
+            return False
+
+        self._cursor_repaint_src = GLib.timeout_add(16, _tick)
+
+    def _composite_local_cursor(self, pb: GdkPixbuf.Pixbuf) -> GdkPixbuf.Pixbuf:
+        """Bake a white arrow into a copy of the frame (always visible).
+
+        Does not depend on OS cursor themes or Gtk.Overlay positioning — the
+        pointer is pixels on the stream surface.
+        """
+        if not self._wants_local_cursor():
+            return pb
+        frac = self._cursor_frac
+        if frac is None:
+            frac = (0.5, 0.5)
+        try:
+            out = pb.copy()
+        except Exception:
+            return pb
+        w = out.get_width()
+        h = out.get_height()
+        if w < 4 or h < 4:
+            return pb
+        cx = int(max(0.0, min(1.0, frac[0])) * (w - 1))
+        cy = int(max(0.0, min(1.0, frac[1])) * (h - 1))
+        # Arrow polygon in local coords (tip at 0,0)
+        poly = [
+            (0, 0),
+            (0, 16),
+            (4, 12),
+            (7, 19),
+            (9, 18),
+            (6, 11),
+            (12, 11),
+        ]
+        # Fill bounding box via scanline
+        min_x = min(p[0] for p in poly)
+        max_x = max(p[0] for p in poly)
+        min_y = min(p[1] for p in poly)
+        max_y = max(p[1] for p in poly)
+
+        def _inside(px: int, py: int) -> bool:
+            # Ray cast
+            inside = False
+            n = len(poly)
+            for i in range(n):
+                x1, y1 = poly[i]
+                x2, y2 = poly[(i + 1) % n]
+                if ((y1 > py) != (y2 > py)) and (
+                    px
+                    < (x2 - x1) * (py - y1) / max(1e-9, (y2 - y1)) + x1
+                ):
+                    inside = not inside
+            return inside
+
+        def _put(ix: int, iy: int, r: int, g: int, b: int) -> None:
+            if ix < 0 or iy < 0 or ix >= w or iy >= h:
+                return
+            try:
+                out.put_pixel(ix, iy, r, g, b)
+            except Exception:
+                pass
+
+        # Outline then fill (black outline, white body)
+        for dy in range(min_y - 1, max_y + 2):
+            for dx in range(min_x - 1, max_x + 2):
+                if _inside(dx, dy):
+                    _put(cx + dx, cy + dy, 255, 255, 255)
+                elif any(
+                    _inside(dx + ox, dy + oy)
+                    for ox, oy in ((-1, 0), (1, 0), (0, -1), (0, 1))
+                ):
+                    _put(cx + dx, cy + dy, 10, 10, 10)
+        return out
+
     def _render(self) -> None:
         pb = self._pixbuf
         if pb is None:
             return
+        # Frontend pointer: composite into frame pixels (bulletproof)
+        try:
+            pb = self._composite_local_cursor(pb)
+        except Exception:
+            pass
         nw, nh = pb.get_width(), pb.get_height()
         if self._zoom_mode is None:
             self.picture.set_content_fit(Gtk.ContentFit.CONTAIN)
