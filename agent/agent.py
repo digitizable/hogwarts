@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
 
-VERSION = "0.5.33-lab"
+VERSION = "0.5.34-lab"
 # Keepstream VIDEO codec byte (matches research keepstream-v0)
 _KS_CODEC_JPEG = 1
 _KS_CODEC_H264 = 2
@@ -1743,6 +1743,8 @@ class _FfmpegH264Source:
         self.method = "ffmpeg-h264"
         self._pending: list[bytes] = []
         self._have_vcl = False
+        self.last_error = ""
+        self._err_file: Any = None
 
     @property
     def size(self) -> tuple[int, int]:
@@ -1750,8 +1752,10 @@ class _FfmpegH264Source:
 
     def start(self) -> bool:
         import shutil
+        import tempfile
 
         if not shutil.which("ffmpeg"):
+            self.last_error = "ffmpeg_not_on_path"
             return False
         display, sw, sh = _display_geometry()
         scale = min(1.0, float(self.max_side) / max(sw, sh, 1))
@@ -1763,35 +1767,32 @@ class _FfmpegH264Source:
         crf = int(max(18, min(28, 33 - (self.quality - 28) * 10 / 67)))
         gop = max(15, min(60, fps_i))  # keyframe interval ~1s
 
-        grab: list[str]
-        if os.name == "nt":
-            grab = [
-                "-f",
-                "gdigrab",
-                "-framerate",
-                str(fps_i),
-                "-draw_mouse",
-                "1",
-                "-i",
-                "desktop",
-            ]
-            tag = "gdigrab"
-        else:
-            grab = [
+        def _grab(draw_mouse: bool) -> tuple[list[str], str]:
+            if os.name == "nt":
+                g: list[str] = [
+                    "-f",
+                    "gdigrab",
+                    "-framerate",
+                    str(fps_i),
+                ]
+                if draw_mouse:
+                    g += ["-draw_mouse", "1"]
+                g += ["-i", "desktop"]
+                return g, "gdigrab"
+            g = [
                 "-f",
                 "x11grab",
                 "-framerate",
                 str(fps_i),
                 "-video_size",
                 f"{sw}x{sh}",
-                "-draw_mouse",
-                "1",
-                "-i",
-                display,
             ]
-            tag = "x11grab"
+            if draw_mouse:
+                g += ["-draw_mouse", "1"]
+            g += ["-i", display]
+            return g, "x11grab"
 
-        def _cmd(encoder: str, extra: list[str]) -> list[str]:
+        def _cmd(grab: list[str], encoder: str, extra: list[str]) -> list[str]:
             return (
                 [
                     "ffmpeg",
@@ -1820,62 +1821,111 @@ class _FfmpegH264Source:
                 ]
             )
 
-        candidates: list[tuple[str, list[str]]] = [
+        # libx264 first (reliable software). NVENC as upgrade when available.
+        # Older agents tried NVENC first and a 0.2s probe could discard a slow
+        # but healthy process; we wait longer and keep stderr for diagnostics.
+        encoder_specs: list[tuple[str, str, list[str]]] = [
             (
-                f"ffmpeg-{tag}-nvenc",
-                _cmd(
-                    "h264_nvenc",
-                    [
-                        "-preset",
-                        "p1",
-                        "-tune",
-                        "ll",
-                        "-rc",
-                        "vbr",
-                        "-cq",
-                        str(max(19, crf - 2)),
-                    ],
-                ),
+                "libx264",
+                "libx264",
+                [
+                    "-preset",
+                    "ultrafast",
+                    "-tune",
+                    "zerolatency",
+                    "-crf",
+                    str(crf),
+                    "-profile:v",
+                    "baseline",
+                ],
             ),
             (
-                f"ffmpeg-{tag}-libx264",
-                _cmd(
-                    "libx264",
-                    [
-                        "-preset",
-                        "ultrafast",
-                        "-tune",
-                        "zerolatency",
-                        "-crf",
-                        str(crf),
-                        "-profile:v",
-                        "baseline",
-                    ],
-                ),
+                "nvenc",
+                "h264_nvenc",
+                [
+                    "-preset",
+                    "p1",
+                    "-tune",
+                    "ll",
+                    "-rc",
+                    "vbr",
+                    "-cq",
+                    str(max(19, crf - 2)),
+                ],
+            ),
+            # Simpler NVENC for drivers that reject p1/ll
+            (
+                "nvenc-simple",
+                "h264_nvenc",
+                ["-preset", "llhp", "-rc", "cbr", "-b:v", "4M"],
             ),
         ]
 
-        for method, cmd in candidates:
-            try:
-                self._proc = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.DEVNULL,
-                    bufsize=0,
-                )
-            except OSError:
+        draw_variants = [True, False] if os.name == "nt" else [True]
+        errors: list[str] = []
+        creationflags = 0
+        if os.name == "nt":
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+        for draw_mouse in draw_variants:
+            grab, tag = _grab(draw_mouse)
+            for label, encoder, extra in encoder_specs:
+                method = f"ffmpeg-{tag}-{label}"
+                cmd = _cmd(grab, encoder, extra)
+                errf = tempfile.TemporaryFile()
+                try:
+                    popen_kw: dict[str, Any] = {
+                        "args": cmd,
+                        "stdout": subprocess.PIPE,
+                        "stderr": errf,
+                        "bufsize": 0,
+                    }
+                    if creationflags:
+                        popen_kw["creationflags"] = creationflags
+                    self._proc = subprocess.Popen(**popen_kw)
+                except OSError as exc:
+                    self._proc = None
+                    try:
+                        errf.close()
+                    except Exception:
+                        pass
+                    errors.append(f"{method}:spawn {exc}")
+                    continue
+                # libx264/nvenc often need >200ms before first packet on Windows
+                alive = False
+                for _ in range(8):  # up to ~0.8s
+                    time.sleep(0.1)
+                    if self._proc is None:
+                        break
+                    if self._proc.poll() is None:
+                        alive = True
+                        break
+                if alive and self._proc is not None:
+                    self.method = method
+                    self.last_error = ""
+                    self._err_file = errf  # keep open for process lifetime
+                    return True
+                err_txt = ""
+                try:
+                    errf.seek(0)
+                    err_txt = (
+                        errf.read(800).decode("utf-8", errors="replace") or ""
+                    ).strip()
+                except Exception:
+                    pass
+                try:
+                    errf.close()
+                except Exception:
+                    pass
+                try:
+                    if self._proc:
+                        self._proc.kill()
+                except Exception:
+                    pass
                 self._proc = None
-                continue
-            time.sleep(0.2)
-            if self._proc is not None and self._proc.poll() is None:
-                self.method = method
-                return True
-            try:
-                if self._proc:
-                    self._proc.kill()
-            except Exception:
-                pass
-            self._proc = None
+                snippet = (err_txt or "exited").replace("\n", " ")[:160]
+                errors.append(f"{method}:{snippet}")
+        self.last_error = "; ".join(errors)[:400] or "all_encoders_failed"
         return False
 
     @staticmethod
@@ -1967,17 +2017,23 @@ class _FfmpegH264Source:
     def stop(self) -> None:
         proc = self._proc
         self._proc = None
-        if proc is None:
-            return
-        try:
-            proc.terminate()
-        except Exception:
-            pass
-        try:
-            proc.wait(timeout=1.5)
-        except Exception:
+        errf = self._err_file
+        self._err_file = None
+        if proc is not None:
             try:
-                proc.kill()
+                proc.terminate()
+            except Exception:
+                pass
+            try:
+                proc.wait(timeout=1.5)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+        if errf is not None:
+            try:
+                errf.close()
             except Exception:
                 pass
         self._buf.clear()
@@ -2061,20 +2117,24 @@ def _ks_handle_client(conn: Any) -> None:
         except Exception:
             ow, oh = sw, sh
         aid = str(_KEEPSTREAM.get("agent_id") or "agent")
-        # Prefer codec for HELLO before capture thread sets live method
+        # Codec for HELLO: trust live only after capture actually started.
+        # Pre-connect default used to be "jpeg", which made HELLO always
+        # advertise jpeg even when session_start requested h264 (P7 bug).
         import shutil as _sh
 
         creq = str(_KEEPSTREAM.get("codec_req") or "auto").lower()
         live = str(_KEEPSTREAM.get("codec") or "").lower()
-        if live in ("jpeg", "h264"):
+        capture_set = bool(str(_KEEPSTREAM.get("capture") or "").strip())
+        if capture_set and live in ("jpeg", "h264"):
             codec_name = live
         elif creq == "jpeg":
             codec_name = "jpeg"
         elif creq in ("h264", "auto") and _sh.which("ffmpeg"):
-            codec_name = "h264"  # will fall back to jpeg if encoder missing
+            codec_name = "h264"  # capture may still fall back to jpeg
         else:
             codec_name = "jpeg"
-        _KEEPSTREAM["codec"] = codec_name
+        if not capture_set:
+            _KEEPSTREAM["codec"] = codec_name
         conn.sendall(f"HELLO_OK {aid} {ow} {oh} {codec_name}\n".encode("utf-8"))
         _KEEPSTREAM["clients"] = int(_KEEPSTREAM.get("clients") or 0) + 1
 
@@ -2206,6 +2266,13 @@ def _ks_handle_client(conn: Any) -> None:
                         send_wake.set()
                 finally:
                     ff_h.stop()
+            else:
+                print(
+                    f"[agent] keepstream H.264 start failed "
+                    f"({ff_h.last_error or 'unknown'}); "
+                    f"{'falling back to MJPEG' if use_jpeg else 'no jpeg fallback'}",
+                    flush=True,
+                )
         if not started and use_jpeg:
             ff = _FfmpegMjpegSource(max_side=side, fps=fps, quality=q)
             if ff.start():
@@ -2380,6 +2447,17 @@ def _session_start(payload: dict[str, Any]) -> dict[str, Any]:
         or ""
     )
 
+    import shutil as _shutil
+
+    has_ff = bool(_shutil.which("ffmpeg"))
+    # Planned codec for HELLO / session_start result (capture may override).
+    if codec_req == "jpeg":
+        planned_codec = "jpeg"
+    elif codec_req in ("h264", "auto") and has_ff:
+        planned_codec = "h264"
+    else:
+        planned_codec = "jpeg"
+
     _KEEPSTREAM.update(
         {
             "stop": False,
@@ -2391,7 +2469,8 @@ def _session_start(payload: dict[str, Any]) -> dict[str, Any]:
             "fps": fps,
             "quality": quality,
             "codec_req": codec_req,
-            "codec": "jpeg",  # filled when capture starts
+            "codec": planned_codec,
+            "capture": "",
             "agent_id": agent_id,
             "frame_id": 0,
             "clients": 0,
@@ -2432,13 +2511,10 @@ def _session_start(payload: dict[str, Any]) -> dict[str, Any]:
 
     elev = _process_elevated()
     # Capture method is set when the first Keepstream client connects; until then
-    # advertise capability (ffmpeg on PATH vs PIL-only).
-    import shutil as _shutil
-
-    has_ff = bool(_shutil.which("ffmpeg"))
-    codec_hint = str(_KEEPSTREAM.get("codec") or codec_req or "auto")
-    if codec_hint == "auto":
-        codec_hint = "h264|jpeg"
+    # advertise planned capability (ffmpeg on PATH vs PIL-only).
+    codec_hint = planned_codec
+    if codec_req == "auto" and has_ff:
+        codec_hint = "h264"  # planned; live capture confirms
     capture_hint = (
         "ffmpeg-h264-or-mjpeg"
         if has_ff
@@ -2448,10 +2524,13 @@ def _session_start(payload: dict[str, Any]) -> dict[str, Any]:
     live_cap = str(_KEEPSTREAM.get("capture") or "").strip()
     if live_cap:
         capture_hint = live_cap
+    live_codec = str(_KEEPSTREAM.get("codec") or planned_codec)
     note = (
-        f"Keepstream capture={capture_hint} codec={codec_hint}. "
-        "auto: prefer H.264 (libx264/nvenc) then MJPEG; "
-        "PIL fallback if ffmpeg missing. Latest-frame drop under load."
+        f"Keepstream capture={capture_hint} codec={live_codec} "
+        f"(req={codec_req}). "
+        "auto/h264: prefer H.264 (libx264/nvenc) then MJPEG; "
+        "PIL fallback if ffmpeg missing. Latest-frame drop under load. "
+        "Live capture method is set when the desk Keepstream client connects."
     )
     if ip_status.get("active"):
         kind = str(ip_status.get("kind") or "provider")
@@ -2474,7 +2553,7 @@ def _session_start(payload: dict[str, Any]) -> dict[str, Any]:
         "port": listen_port,
         "host": connect_host,
         "connect_host": connect_host,
-        "codec": str(_KEEPSTREAM.get("codec") or "jpeg"),
+        "codec": live_codec,
         "codec_req": codec_req,
         "max_side": max_side,
         "fps": fps,
