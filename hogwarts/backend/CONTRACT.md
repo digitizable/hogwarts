@@ -77,6 +77,33 @@ GET /api/v1/agents/{id}
 → 200 { "agent": { … } }
 ```
 
+```
+DELETE /api/v1/agents/{id}
+→ 200 { "ok": true, "id": "agt_…" }
+```
+
+Hard-delete agent row + tasks (listeners lose `agent_id` binding). Events are kept.
+
+### Identity lifecycle (dedupe)
+
+Re-enroll used to always `INSERT` a new `agt_*`, leaving offline zombies on the desk
+when an implant restarts without a persisted token. Plane now (0.5.22+):
+
+1. **Rebind** on enroll when the same `package_id` + hostname already exists, or when
+   an **offline** agent matches host fingerprint (`hostname` · normalized `arch` ·
+   `username`). Issues a fresh `agent_token`; keeps the same `agt_*`.
+2. **Prune** offline siblings for that host after enroll and on each check-in.
+3. **Startup / ops prune** collapses offline-only host groups (keeps newest).
+
+Disable with `PLANE_AGENT_DEDUPE=0`. Manual force:
+
+```
+POST /api/v1/operator/agents/prune
+→ 200 { "ok": true, "pruned": N, "dedupe": true|false }
+```
+
+`POST /api/v1/agent/enroll` may include `"rebound": true` when the agent id was reused.
+
 ---
 
 ## Operator — tasks (T4)
