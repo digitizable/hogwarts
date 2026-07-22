@@ -2285,12 +2285,13 @@ class HogwartsPage(Gtk.Box):
                 max_side = int(self._agents.shot_max_side())
             profile = str(start_opts.get("profile") or "balanced").lower()
             if profile in ("gaming", "gaming-lan"):
-                max_side = max(640, min(max_side, 960))
+                # v0.5: 1280 playable quality (was 960 — soft for games)
+                max_side = max(640, min(max_side, 1280))
             else:
                 max_side = max(960, min(max_side, 1280))
         except Exception:
             max_side = (
-                960
+                1280
                 if str(start_opts.get("profile") or "") in ("gaming", "gaming-lan")
                 else 1280
             )
@@ -2363,6 +2364,11 @@ class HogwartsPage(Gtk.Box):
                     "fps": max(5.0, min(fps, 60.0)),
                     "quality": max(28, min(quality, 92)),
                 }
+                # Parsec-class local cursor (gaming profiles default True server-side)
+                if "local_cursor" in start_opts:
+                    payload["local_cursor"] = bool(start_opts.get("local_cursor"))
+                elif profile in ("gaming", "gaming-lan"):
+                    payload["local_cursor"] = True
                 ip = start_opts.get("input_provider")
                 if isinstance(ip, dict) and (
                     ip.get("command") or ip.get("pipe") or ip.get("kind")

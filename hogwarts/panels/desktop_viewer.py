@@ -43,9 +43,9 @@ _QUALITY: list[tuple[str, int]] = [
 
 # Session latency profiles (sent as session_start.profile + fps/max_side)
 _SESSION_PROFILES: list[tuple[str, str]] = [
-    ("Gaming LAN", "gaming-lan"),  # ≤960 @ 60 MJPEG — lowest felt lag on LAN
-    ("Gaming", "gaming"),  # ≤960 @ 60 H.264/NVENC — WAN/path friendly
-    ("Balanced", "balanced"),  # 1280 @ 30 H.264
+    ("Gaming LAN", "gaming-lan"),  # ≤1280 @ 60 MJPEG + local cursor + UDP
+    ("Gaming", "gaming"),  # ≤1280 @ 60 H.264/NVENC + local cursor + UDP
+    ("Balanced", "balanced"),  # 1280 @ 30 H.264 (host cursor in-frame)
     ("Quality", "quality"),  # sharper / slower
 ]
 
@@ -618,7 +618,7 @@ class RemoteDesktopViewer(Gtk.Window):
         rclick.connect("pressed", on_right)
         self.picture.add_controller(rclick)
 
-        # Hover move while Control (throttled) — keeps cursor in sync without click
+        # Hover move while Control/Session — gaming reports ~120 Hz (Parsec-class)
         motion = Gtk.EventControllerMotion()
 
         def on_motion(_c: Gtk.EventControllerMotion, x: float, y: float) -> None:
@@ -631,7 +631,19 @@ class RemoteDesktopViewer(Gtk.Window):
             import time as _time
 
             now = _time.monotonic()
-            if now - self._last_move_flush < 0.04:
+            # Gaming Session: 8ms (~125 Hz). Balanced/Control: 40ms.
+            ks = self._keepstream
+            ks_up = bool(ks is not None and getattr(ks, "connected", False))
+            min_dt = 0.04
+            if ks_up:
+                try:
+                    if self.current_session_profile() in ("gaming", "gaming-lan"):
+                        min_dt = 0.008
+                    else:
+                        min_dt = 0.016
+                except Exception:
+                    min_dt = 0.008
+            if now - self._last_move_flush < min_dt:
                 return
             frac = self._widget_xy_to_frac(self.picture, x, y)
             if frac is None:
@@ -1089,6 +1101,22 @@ class RemoteDesktopViewer(Gtk.Window):
             lines.append("Session stopped.")
         self.session_lab.set_text("\n".join(lines) if lines else "Session updated.")
 
+    def _apply_session_cursor(self) -> None:
+        """Parsec-class: gaming* uses local OS pointer; balanced hides it (host in-frame)."""
+        ks = self._keepstream
+        local = False
+        if ks is not None:
+            local = bool(getattr(ks, "local_cursor", False))
+        if not local:
+            try:
+                local = self.current_session_profile() in ("gaming", "gaming-lan")
+            except Exception:
+                local = False
+        try:
+            self.picture.set_cursor_from_name("default" if local else "none")
+        except Exception:
+            pass
+
     def attach_keepstream(self, client: Any) -> None:
         """Attach a live KeepstreamClient; frames already applied via page callbacks."""
         self._keepstream = client
@@ -1100,18 +1128,22 @@ class RemoteDesktopViewer(Gtk.Window):
             self._mode_session.set_active(True)
         else:
             self._set_mode("session")
-        # Hide local cursor — agent Keepstream bakes Windows cursor into frames.
-        try:
-            self.picture.set_cursor_from_name("none")
-        except Exception:
-            pass
+        # Gaming: local cursor (host capture draw_mouse=0). Balanced: hide local.
+        self._apply_session_cursor()
         # Stop task-poll Live — Keepstream owns frames now
         if self.btn_live.get_active() and self._on_live:
             self.btn_live.set_active(False)
-        self._set_status(
-            "Keepstream Session — remote cursor in stream · local pointer hidden",
-            ok=True,
-        )
+        local = bool(getattr(client, "local_cursor", False))
+        if local:
+            self._set_status(
+                "Keepstream Session — local cursor (Parsec-class) · input over TCP",
+                ok=True,
+            )
+        else:
+            self._set_status(
+                "Keepstream Session — host cursor in stream · local pointer hidden",
+                ok=True,
+            )
 
     def _accepts_remote_input(self) -> bool:
         """Control mode, or Session mode while Keepstream is connected."""
@@ -1164,25 +1196,39 @@ class RemoteDesktopViewer(Gtk.Window):
             # Stream frames live in the picture view
             self._main_stack.set_visible_child_name("view")
             if mode == "session" and ks_up:
-                self.mode_hint.set_text(
-                    "Session (Keepstream): Windows cursor in-frame · "
-                    "local pointer hidden · click/drag injects over TCP"
-                )
-                # Hide local cursor so only the remote (in-stream) pointer shows.
-                try:
-                    self.picture.set_cursor_from_name("none")
-                except Exception:
-                    pass
+                local = bool(getattr(self._keepstream, "local_cursor", False))
+                if not local:
+                    try:
+                        local = self.current_session_profile() in (
+                            "gaming",
+                            "gaming-lan",
+                        )
+                    except Exception:
+                        local = False
+                if local:
+                    self.mode_hint.set_text(
+                        "Session (Keepstream): local cursor · "
+                        "host pointer off in capture · click/drag over TCP"
+                    )
+                else:
+                    self.mode_hint.set_text(
+                        "Session (Keepstream): host cursor in-frame · "
+                        "local pointer hidden · click/drag over TCP"
+                    )
+                self._apply_session_cursor()
             elif mode == "control":
                 if ks_up:
-                    self.mode_hint.set_text(
-                        "Control + Keepstream: remote cursor in-frame · "
-                        "local pointer hidden · input over TCP"
-                    )
-                    try:
-                        self.picture.set_cursor_from_name("none")
-                    except Exception:
-                        pass
+                    local = bool(getattr(self._keepstream, "local_cursor", False))
+                    if local:
+                        self.mode_hint.set_text(
+                            "Control + Keepstream: local cursor · input over TCP"
+                        )
+                    else:
+                        self.mode_hint.set_text(
+                            "Control + Keepstream: host cursor in-frame · "
+                            "local pointer hidden · input over TCP"
+                        )
+                    self._apply_session_cursor()
                 else:
                     self.mode_hint.set_text(
                         "Control: host cursor in-frame · input prioritized · "
@@ -1872,18 +1918,21 @@ class RemoteDesktopViewer(Gtk.Window):
         prof = self.current_session_profile()
         if prof in ("gaming", "gaming-lan"):
             try:
-                if self.current_max_side() > 960:
-                    self.quality_dd.set_selected(0)  # Fast 960
+                # Prefer HD 1280 for playable quality (was Fast 960 — too soft)
+                if self.current_max_side() > 1280:
+                    self.quality_dd.set_selected(1)  # HD 1280
+                elif self.current_max_side() < 960:
+                    self.quality_dd.set_selected(1)
             except Exception:
                 pass
             if prof == "gaming-lan":
                 self._set_status(
-                    "Session profile: Gaming LAN (≤960 @ 60fps MJPEG — lowest lag)",
+                    "Session: Gaming LAN (≤1280 @ 60 MJPEG · UDP · local cursor)",
                     ok=None,
                 )
             else:
                 self._set_status(
-                    "Session profile: Gaming (≤960 @ 60fps H.264 / NVENC)",
+                    "Session: Gaming (≤1280 @ 60 H.264/NVENC · UDP · local cursor)",
                     ok=None,
                 )
         elif prof == "quality":
@@ -1899,15 +1948,17 @@ class RemoteDesktopViewer(Gtk.Window):
         opts["profile"] = prof
         side = self.current_max_side()
         if prof == "gaming-lan":
-            opts["max_side"] = min(int(side), 960)
+            opts["max_side"] = min(int(side), 1280)
             opts["fps"] = 60
-            opts["quality"] = 68
+            opts["quality"] = 72
             opts["codec"] = "jpeg"  # MJPEG — snappiest on LAN
+            opts["local_cursor"] = True
         elif prof == "gaming":
-            opts["max_side"] = min(int(side), 960)
+            opts["max_side"] = min(int(side), 1280)
             opts["fps"] = 60
-            opts["quality"] = 70
+            opts["quality"] = 72
             opts["codec"] = "h264"
+            opts["local_cursor"] = True
         elif prof == "quality":
             opts["max_side"] = max(int(side), 1280)
             opts["fps"] = 30
