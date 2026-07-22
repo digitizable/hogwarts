@@ -2308,10 +2308,10 @@ class HogwartsPage(Gtk.Box):
             else:
                 max_side = int(self._agents.shot_max_side())
             profile = str(start_opts.get("profile") or "default").lower()
-            # Single default stream mode — allow sharp res
-            max_side = max(960, min(max_side, 1920))
+            # LAN 60: hard cap 1600 (desk default 1440)
+            max_side = max(960, min(max_side, 1600))
         except Exception:
-            max_side = 1600
+            max_side = 1440
         # Stash for paint/input tuning while Session is up
         self._ks_profile = "default"
 
@@ -2467,23 +2467,30 @@ class HogwartsPage(Gtk.Box):
                     if item is None:
                         return False
                     data, meta = item
-                    rtt = meta.get("rtt_ms")
-                    rtt_s = (
-                        f" · rtt {rtt:.0f}ms"
-                        if isinstance(rtt, (int, float))
-                        else ""
-                    )
-                    drop = meta.get("dropped") or 0
-                    drop_s = f" · drop {drop}" if drop else ""
-                    cname = meta.get("codec_name") or (
-                        "h264" if meta.get("codec") == 2 else "jpeg"
-                    )
-                    note = (
-                        f"STREAM {meta.get('width')}×{meta.get('height')} · "
-                        f"{cname} · #{meta.get('frame_id')} · "
-                        f"{meta.get('bytes')} B"
-                        f"{rtt_s}{drop_s}"
-                    )
+                    # Throttle STREAM note strings — building them every frame
+                    # steals main-thread time from GdkPixbuf decode @ 60.
+                    n = int(getattr(self, "_ks_paint_n", 0) or 0) + 1
+                    self._ks_paint_n = n
+                    if n == 1 or n % 45 == 0:
+                        rtt = meta.get("rtt_ms")
+                        rtt_s = (
+                            f" · rtt {rtt:.0f}ms"
+                            if isinstance(rtt, (int, float))
+                            else ""
+                        )
+                        drop = meta.get("dropped") or 0
+                        drop_s = f" · drop {drop}" if drop else ""
+                        cname = meta.get("codec_name") or (
+                            "h264" if meta.get("codec") == 2 else "jpeg"
+                        )
+                        note = (
+                            f"STREAM {meta.get('width')}×{meta.get('height')} · "
+                            f"{cname} · #{meta.get('frame_id')} · "
+                            f"{meta.get('bytes')} B"
+                            f"{rtt_s}{drop_s}"
+                        )
+                    else:
+                        note = "STREAM"
                     self._agents.set_desktop_frame(
                         data,
                         note=note,
@@ -2499,9 +2506,9 @@ class HogwartsPage(Gtk.Box):
                     # One paint scheduled; always paints *latest* frame (smooth).
                     if getattr(self, "_ks_paint_src", None) is not None:
                         return
-                    # Always high-priority paint for Default stream @ 60
+                    # HIGH_IDLE: after events, before low-priority GTK work
                     self._ks_paint_src = GLib.idle_add(
-                        _ks_paint_tick, priority=GLib.PRIORITY_DEFAULT
+                        _ks_paint_tick, priority=GLib.PRIORITY_HIGH_IDLE
                     )
 
                 def on_status(msg: str, ok: bool | None) -> None:

@@ -338,8 +338,8 @@ class RemoteDesktopViewer(Gtk.Window):
                 break
         self.quality_dd.set_selected(qi)
         self.quality_dd.set_tooltip_text(
-            "Capture / Live max side. Stream mode uses high-res low-latency defaults "
-            "(up to 1600–1920 @ 60 MJPEG UDP)."
+            "Capture / Live max side only. Stream uses LAN 60 defaults "
+            "(≤1440 @ 60 MJPEG UDP q80) independent of this dropdown."
         )
         self.quality_dd.connect(
             "notify::selected", lambda *_: self._on_quality_changed()
@@ -1371,28 +1371,38 @@ class RemoteDesktopViewer(Gtk.Window):
         )
 
         if is_stream and not self._archive_live:
-            # ── Fast path (Stream / Live) — minimize GTK work per frame ──
-            try:
-                self.empty_lab.set_visible(False)
-            except Exception:
-                pass
+            # ── Fast path (Stream / Live) — paint only, almost no chrome ──
+            if getattr(self, "empty_lab", None) is not None:
+                try:
+                    if self.empty_lab.get_visible():
+                        self.empty_lab.set_visible(False)
+                except Exception:
+                    pass
             self._capturing = False
             self._current_path = None
-            # Stable pixbuf paint only — Texture path caused cursor flicker/"film"
-            self._render()
-            # Throttle chrome hard — status/title updates steal frames
+            # Direct pixbuf set — skip zoom/scale work on Fit (LAN 60)
+            if self._zoom_mode is None:
+                try:
+                    self.picture.set_content_fit(Gtk.ContentFit.CONTAIN)
+                    self.picture.set_can_shrink(True)
+                    self.picture.set_pixbuf(pb)
+                    self.picture.set_size_request(-1, -1)
+                except Exception:
+                    self._render()
+            else:
+                self._render()
+            # Chrome at most every 2s (meta); title every 5s
             import time as _time
 
             now = _time.monotonic()
             last = float(getattr(self, "_stream_chrome_ts", 0.0) or 0.0)
-            if now - last >= 1.0:
+            if now - last >= 2.0:
                 self._stream_chrome_ts = now
-                # Don't rewrite status every second if it would flash over mode hints
                 try:
                     self._update_meta()
                 except Exception:
                     pass
-                if now - float(getattr(self, "_stream_title_ts", 0.0) or 0.0) >= 3.0:
+                if now - float(getattr(self, "_stream_title_ts", 0.0) or 0.0) >= 5.0:
                     self._stream_title_ts = now
                     self.set_title(
                         f"Remote Viewer - {self._agent_label} · {w}×{h}"
@@ -2569,21 +2579,20 @@ class RemoteDesktopViewer(Gtk.Window):
 
     def _on_session_profile_changed(self) -> None:
         self._set_status(
-            "Stream: Default · ≤1600–1920 @ 60 MJPEG · pure UDP · low latency",
+            "Stream: LAN 60 · ≤1440 @ 60 MJPEG · q80 · pure UDP",
             ok=None,
         )
 
     def session_start_options(self) -> dict[str, Any]:
-        """Single Default stream mode (ex-gaming): quality + low latency."""
+        """LAN 60 stream: sustained ~60fps over maximum still sharpness."""
         self._save_input_provider_prefs()
         opts: dict[str, Any] = {}
         opts["profile"] = _SESSION_DEFAULT_PROFILE
-        side = self.current_max_side()
-        # Prefer sharp stream; floor 1280, allow up to 1920 from Res dropdown
-        opts["max_side"] = min(max(int(side), 1280), 1920)
+        # Fixed LAN 60 knobs (Res dropdown is Capture/Live only)
+        opts["max_side"] = 1440
         opts["fps"] = 60
-        opts["quality"] = 86  # crisp UI (q:v ~2–3)
-        opts["codec"] = "jpeg"  # pure UDP MJPEG — path that felt best
+        opts["quality"] = 80  # q:v ~4 — encode headroom for 60 under load
+        opts["codec"] = "jpeg"  # pure UDP MJPEG
         opts["local_cursor"] = True
         opts["draw_mouse"] = False
         opts["transport"] = "udp"

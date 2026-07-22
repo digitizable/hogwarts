@@ -1869,15 +1869,23 @@ class AgentsPanel(Gtk.Box):
         ``pixel_format``: ``jpeg`` (default) or ``rgb24`` (Keepstream H.264).
         """
         self._frame_bytes = data
-        self._frame_note = note or f"Frame {len(data)} bytes"
-        msg = self._frame_note
-        self.desktop_status.set_text(msg)
-        self.desktop_status.remove_css_class("hogwarts-ok")
-        self.desktop_status.remove_css_class("hogwarts-fail")
-        if ok is True:
-            self.desktop_status.add_css_class("hogwarts-ok")
-        elif ok is False:
-            self.desktop_status.add_css_class("hogwarts-fail")
+        # Short "STREAM" notes are paint-path placeholders — don't thrash labels
+        raw_note = note or f"Frame {len(data)} bytes"
+        if raw_note == "STREAM" and self._frame_note:
+            msg = self._frame_note
+        else:
+            self._frame_note = raw_note
+            msg = raw_note
+            try:
+                self.desktop_status.set_text(msg)
+            except Exception:
+                pass
+            self.desktop_status.remove_css_class("hogwarts-ok")
+            self.desktop_status.remove_css_class("hogwarts-fail")
+            if ok is True:
+                self.desktop_status.add_css_class("hogwarts-ok")
+            elif ok is False:
+                self.desktop_status.add_css_class("hogwarts-fail")
         # Default: never archive into sidebar/disk (viewer Save to disk is opt-in)
         if record_history is None:
             record_history = False
