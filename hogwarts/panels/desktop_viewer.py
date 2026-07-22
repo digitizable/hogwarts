@@ -622,7 +622,6 @@ class RemoteDesktopViewer(Gtk.Window):
         def on_drag_begin(_g: Gtk.GestureDrag, x: float, y: float) -> None:
             if not self._accepts_remote_input() or self._pixbuf is None:
                 return
-            self._move_overlay_cursor(x, y)
             frac = self._widget_xy_to_frac(self.picture, x, y)
             if frac is None:
                 self._drag_active = False
@@ -637,7 +636,6 @@ class RemoteDesktopViewer(Gtk.Window):
             ok, ox, oy = _g.get_start_point()
             if not ok:
                 return
-            self._move_overlay_cursor(ox + x, oy + y)
             frac = self._widget_xy_to_frac(self.picture, ox + x, oy + y)
             if frac is None:
                 return
@@ -661,7 +659,6 @@ class RemoteDesktopViewer(Gtk.Window):
             self._drag_active = False
             if not ok:
                 return
-            self._move_overlay_cursor(ox + x, oy + y)
             frac = self._widget_xy_to_frac(self.picture, ox + x, oy + y)
             if frac is None:
                 frac = self._drag_start
