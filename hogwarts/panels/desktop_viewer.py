@@ -665,8 +665,9 @@ class RemoteDesktopViewer(Gtk.Window):
                 if frac is not None:
                     self._cursor_frac = frac
                 self._last_motion_xy = (x, y)
+                # Lightweight overlay only — do NOT re-render the full frame
+                # (full-frame cursor composite killed FPS and drew a box).
                 self._move_overlay_cursor(x, y)
-                self._schedule_cursor_repaint()
 
             if (
                 not self._accepts_remote_input()
@@ -679,12 +680,8 @@ class RemoteDesktopViewer(Gtk.Window):
             now = _time.monotonic()
             ks = self._keepstream
             ks_up = bool(ks is not None and getattr(ks, "connected", False))
-            # Session: ~120–160 Hz absolute moves (hover + smooth aim).
-            # Control/Live poll: 25 Hz is enough.
-            if ks_up:
-                min_dt = 0.006
-            else:
-                min_dt = 0.04
+            # Session: ~120 Hz absolute moves (hover + aim). Control: 25 Hz.
+            min_dt = 0.008 if ks_up else 0.04
             if now - self._last_move_flush < min_dt:
                 return
             self._last_move_flush = now
@@ -742,16 +739,24 @@ class RemoteDesktopViewer(Gtk.Window):
         self._stream_overlay.set_hexpand(True)
         self._stream_overlay.set_vexpand(True)
         self._stream_overlay.set_child(self.picture)
+        # Prefer a real Gdk.Cursor from a small texture (no DA box, no frame
+        # composite). DrawingArea is fallback only if texture cursor fails.
         self._cursor_da = Gtk.DrawingArea()
-        self._cursor_da.set_content_width(22)
-        self._cursor_da.set_content_height(26)
+        self._cursor_da.set_content_width(18)
+        self._cursor_da.set_content_height(22)
         self._cursor_da.set_halign(Gtk.Align.START)
         self._cursor_da.set_valign(Gtk.Align.START)
-        self._cursor_da.set_can_target(False)  # clicks pass through to picture
+        self._cursor_da.set_can_target(False)
         self._cursor_da.set_draw_func(self._on_draw_overlay_cursor, None)
         self._cursor_da.set_visible(False)
         self._cursor_da.add_css_class("rdv-overlay-cursor")
+        try:
+            self._cursor_da.set_opacity(1.0)
+        except Exception:
+            pass
         self._stream_overlay.add_overlay(self._cursor_da)
+        self._texture_cursor: Any = None  # Gdk.Cursor from arrow texture
+        self._use_texture_cursor = False
 
         frame = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         frame.add_css_class("rdv-frame")
@@ -1078,17 +1083,16 @@ class RemoteDesktopViewer(Gtk.Window):
             self._capturing = False
             self._current_path = None
             self._render()
-            # Throttle chrome updates so paint doesn't starve input
+            # Throttle chrome hard — status/title updates steal frames
             import time as _time
 
             now = _time.monotonic()
             last = float(getattr(self, "_stream_chrome_ts", 0.0) or 0.0)
-            if now - last >= 0.35:
+            if now - last >= 0.75:
                 self._stream_chrome_ts = now
                 self._set_status(self._note, ok=ok)
                 self._update_meta()
-                # Title less often — WM updates are relatively expensive
-                if now - float(getattr(self, "_stream_title_ts", 0.0) or 0.0) >= 1.5:
+                if now - float(getattr(self, "_stream_title_ts", 0.0) or 0.0) >= 2.5:
                     self._stream_title_ts = now
                     self.set_title(
                         f"Remote Viewer - {self._agent_label} · {w}×{h}"
@@ -1198,84 +1202,130 @@ class RemoteDesktopViewer(Gtk.Window):
             return True
         return False
 
+    def _build_arrow_texture_cursor(self) -> Any | None:
+        """Build a Gdk.Cursor from a tiny RGBA arrow (hotspot at tip)."""
+        try:
+            w, h = 16, 20
+            rowstride = w * 4
+            buf = bytearray(h * rowstride)
+            poly = [
+                (1, 1),
+                (1, 17),
+                (5, 13),
+                (8, 19),
+                (10, 18),
+                (7, 12),
+                (13, 12),
+            ]
+
+            def _inside(px: int, py: int) -> bool:
+                inside = False
+                n = len(poly)
+                for i in range(n):
+                    x1, y1 = poly[i]
+                    x2, y2 = poly[(i + 1) % n]
+                    if ((y1 > py) != (y2 > py)) and (
+                        px < (x2 - x1) * (py - y1) / max(1e-9, (y2 - y1)) + x1
+                    ):
+                        inside = not inside
+                return inside
+
+            for y in range(h):
+                for x in range(w):
+                    i = y * rowstride + x * 4
+                    if _inside(x, y):
+                        buf[i : i + 4] = bytes((255, 255, 255, 255))
+                    elif any(
+                        _inside(x + ox, y + oy)
+                        for ox, oy in ((-1, 0), (1, 0), (0, -1), (0, 1))
+                    ):
+                        buf[i : i + 4] = bytes((20, 20, 20, 255))
+            gbytes = GLib.Bytes.new(bytes(buf))
+            pb = GdkPixbuf.Pixbuf.new_from_bytes(
+                gbytes, GdkPixbuf.Colorspace.RGB, True, 8, w, h, rowstride
+            )
+            tex = Gdk.Texture.new_for_pixbuf(pb)
+            # GTK4: Cursor.new_from_texture(texture, hotspot_x, hotspot_y)
+            try:
+                cur = Gdk.Cursor.new_from_texture(tex, 1, 1)
+            except TypeError:
+                cur = Gdk.Cursor.new_from_texture(tex, 1, 1, None)
+            self._cursor_stamp_bytes = gbytes
+            self._cursor_stamp_pb = pb
+            self._cursor_stamp_tex = tex
+            return cur
+        except Exception:
+            return None
+
     def _on_draw_overlay_cursor(
         self,
         _da: Gtk.DrawingArea,
         cr: Any,
-        _w: int,
-        _h: int,
+        w: int,
+        h: int,
         _data: Any,
     ) -> None:
-        """Classic arrow pointer (black outline, white fill)."""
-        # Tip at (1,1) so hot-spot is top-left of the DrawingArea
-        cr.set_line_width(1.2)
+        """Fallback arrow — fully transparent DA (no opaque box)."""
+        try:
+            import cairo  # type: ignore
+
+            cr.set_operator(cairo.Operator.CLEAR)
+            cr.rectangle(0, 0, max(1, w), max(1, h))
+            cr.fill()
+            cr.set_operator(cairo.Operator.OVER)
+        except Exception:
+            try:
+                cr.set_source_rgba(0, 0, 0, 0)
+                cr.paint()
+            except Exception:
+                pass
+        cr.set_line_width(1.25)
         cr.move_to(1, 1)
-        cr.line_to(1, 18)
-        cr.line_to(5, 14)
-        cr.line_to(8, 21)
-        cr.line_to(10.5, 20)
-        cr.line_to(7.5, 13)
-        cr.line_to(13, 13)
+        cr.line_to(1, 17)
+        cr.line_to(5, 13)
+        cr.line_to(8, 19)
+        cr.line_to(10, 18)
+        cr.line_to(7, 12)
+        cr.line_to(13, 12)
         cr.close_path()
-        cr.set_source_rgb(1.0, 1.0, 1.0)
+        cr.set_source_rgba(1.0, 1.0, 1.0, 1.0)
         cr.fill_preserve()
-        cr.set_source_rgb(0.05, 0.05, 0.05)
+        cr.set_source_rgba(0.05, 0.05, 0.05, 1.0)
         cr.stroke()
 
     def _move_overlay_cursor(self, x: float, y: float) -> None:
-        """Position the drawn pointer at widget coords (hotspot ≈ tip)."""
-        if not self._overlay_cursor_on:
+        """Position fallback DrawingArea pointer (texture cursor needs no move)."""
+        if not self._overlay_cursor_on or self._use_texture_cursor:
             return
         da = getattr(self, "_cursor_da", None)
         if da is None:
             return
         try:
-            # Hotspot at tip (1,1); clamp so it stays on the overlay
             mx = max(0, int(x) - 1)
             my = max(0, int(y) - 1)
-            da.set_margin_start(mx)
-            da.set_margin_top(my)
+            if getattr(self, "_cursor_margin", None) != (mx, my):
+                self._cursor_margin = (mx, my)
+                da.set_margin_start(mx)
+                da.set_margin_top(my)
             if not da.get_visible():
                 da.set_visible(True)
         except Exception:
             pass
 
-    def _set_widget_cursor_none(self, widget: Gtk.Widget | None) -> None:
-        """Hide the system cursor so only the drawn overlay shows."""
-        if widget is None:
-            return
-        try:
-            widget.set_cursor_from_name("none")
-        except Exception:
-            try:
-                nc = Gdk.Cursor.new_from_name("none")
-                if nc is not None:
-                    widget.set_cursor(nc)
-            except Exception:
-                try:
-                    widget.set_cursor(None)
-                except Exception:
-                    pass
-
     def _apply_session_cursor(self) -> None:
-        """Parsec-class pointer: draw overlay arrow; hide system cursor.
+        """Parsec-class pointer: texture OS cursor (preferred) or transparent DA.
 
-        set_cursor("default") is unreliable on this desk (stayed invisible while
-        host draw_mouse=0). The DrawingArea overlay is always painted.
+        Never full-frame composite (FPS killer + white/black box artifact).
         """
         local = self._wants_local_cursor()
         self._overlay_cursor_on = bool(local)
         da = getattr(self, "_cursor_da", None)
-        if da is not None:
-            try:
-                da.set_visible(bool(local))
-            except Exception:
-                pass
-        # Hide OS cursor whenever we own the pointer (overlay) OR host paints it
-        # (balanced) — either way system arrow over the picture is wrong/dupe.
-        hide_system = True
-        if not local and self._mode == "view":
-            hide_system = False
+
+        # Build custom arrow cursor once
+        if local and self._texture_cursor is None:
+            self._texture_cursor = self._build_arrow_texture_cursor()
+            self._use_texture_cursor = self._texture_cursor is not None
+
         parent = None
         try:
             parent = self.picture.get_parent()
@@ -1288,10 +1338,52 @@ class RemoteDesktopViewer(Gtk.Window):
             parent,
             self,
         ]
-        if hide_system:
+
+        if local and self._use_texture_cursor and self._texture_cursor is not None:
+            # Real cursor from texture — no overlay widget, no frame thrash
+            if da is not None:
+                try:
+                    da.set_visible(False)
+                except Exception:
+                    pass
             for w in widgets:
-                self._set_widget_cursor_none(w)
+                if w is None:
+                    continue
+                try:
+                    w.set_cursor(self._texture_cursor)
+                except Exception:
+                    pass
+            return
+
+        # Fallback: transparent DrawingArea arrow
+        if da is not None:
+            try:
+                da.set_visible(bool(local))
+            except Exception:
+                pass
+        if local:
+            for w in widgets:
+                if w is None:
+                    continue
+                try:
+                    w.set_cursor_from_name("none")
+                except Exception:
+                    pass
+            if self._last_motion_xy is not None:
+                self._move_overlay_cursor(*self._last_motion_xy)
+            else:
+                try:
+                    ww = max(40, self.picture.get_width() or 400)
+                    wh = max(40, self.picture.get_height() or 300)
+                    self._move_overlay_cursor(ww * 0.5, wh * 0.5)
+                except Exception:
+                    self._move_overlay_cursor(40, 40)
         else:
+            if da is not None:
+                try:
+                    da.set_visible(False)
+                except Exception:
+                    pass
             for w in widgets:
                 if w is None:
                     continue
@@ -1299,16 +1391,6 @@ class RemoteDesktopViewer(Gtk.Window):
                     w.set_cursor(None)
                 except Exception:
                     pass
-        # Seed overlay near center if we have no motion yet
-        if local and self._last_motion_xy is None:
-            try:
-                ww = max(40, self.picture.get_width() or 400)
-                wh = max(40, self.picture.get_height() or 300)
-                self._move_overlay_cursor(ww * 0.5, wh * 0.5)
-            except Exception:
-                self._move_overlay_cursor(40, 40)
-        elif local and self._last_motion_xy is not None:
-            self._move_overlay_cursor(*self._last_motion_xy)
 
     def on_keepstream_up(self) -> None:
         """Called when HELLO_OK lands (local_cursor flag now reliable)."""
@@ -2381,143 +2463,15 @@ class RemoteDesktopViewer(Gtk.Window):
             smaller = [s for s in scales if s < cur - 1e-6]
             self._set_zoom(smaller[-1] if smaller else scales[0])
 
-    def _schedule_cursor_repaint(self) -> None:
-        """Coalesce cursor-only repaints (~60 Hz) between stream frames."""
-        if not self._wants_local_cursor():
-            return
-        if self._cursor_repaint_src is not None:
-            return
-
-        def _tick() -> bool:
-            self._cursor_repaint_src = None
-            try:
-                self._render()
-            except Exception:
-                pass
-            return False
-
-        # 12ms ≈ 80 Hz max extra paints — cheap with composite()
-        self._cursor_repaint_src = GLib.timeout_add(12, _tick)
-
-    def _ensure_cursor_stamp(self) -> GdkPixbuf.Pixbuf | None:
-        """Cached 16×20 RGBA arrow (built once via raw pixels)."""
-        stamp = getattr(self, "_cursor_stamp", None)
-        if stamp is not None:
-            return stamp
-        try:
-            w, h = 16, 20
-            rowstride = w * 4
-            buf = bytearray(h * rowstride)  # transparent zero
-            poly = [
-                (1, 1),
-                (1, 17),
-                (5, 13),
-                (8, 19),
-                (10, 18),
-                (7, 12),
-                (13, 12),
-            ]
-
-            def _inside(px: int, py: int) -> bool:
-                inside = False
-                n = len(poly)
-                for i in range(n):
-                    x1, y1 = poly[i]
-                    x2, y2 = poly[(i + 1) % n]
-                    if ((y1 > py) != (y2 > py)) and (
-                        px < (x2 - x1) * (py - y1) / max(1e-9, (y2 - y1)) + x1
-                    ):
-                        inside = not inside
-                return inside
-
-            def _set(x: int, y: int, r: int, g: int, b: int, a: int = 255) -> None:
-                if x < 0 or y < 0 or x >= w or y >= h:
-                    return
-                i = y * rowstride + x * 4
-                buf[i] = r
-                buf[i + 1] = g
-                buf[i + 2] = b
-                buf[i + 3] = a
-
-            for y in range(h):
-                for x in range(w):
-                    if _inside(x, y):
-                        _set(x, y, 255, 255, 255, 255)
-                    elif any(
-                        _inside(x + ox, y + oy)
-                        for ox, oy in ((-1, 0), (1, 0), (0, -1), (0, 1))
-                    ):
-                        _set(x, y, 15, 15, 15, 255)
-            gbytes = GLib.Bytes.new(bytes(buf))
-            stamp = GdkPixbuf.Pixbuf.new_from_bytes(
-                gbytes,
-                GdkPixbuf.Colorspace.RGB,
-                True,
-                8,
-                w,
-                h,
-                rowstride,
-            )
-            self._cursor_stamp = stamp
-            self._cursor_stamp_bytes = gbytes  # keep alive
-            return stamp
-        except Exception:
-            self._cursor_stamp = None
-            return None
-
-    def _composite_local_cursor(self, pb: GdkPixbuf.Pixbuf) -> GdkPixbuf.Pixbuf:
-        """Stamp cached arrow onto a copy of the frame (fast, always visible)."""
-        if not self._wants_local_cursor():
-            return pb
-        stamp = self._ensure_cursor_stamp()
-        if stamp is None:
-            return pb
-        frac = self._cursor_frac or (0.5, 0.5)
-        try:
-            out = pb.copy()
-        except Exception:
-            return pb
-        w = out.get_width()
-        h = out.get_height()
-        if w < 4 or h < 4:
-            return pb
-        cx = int(max(0.0, min(1.0, frac[0])) * (w - 1))
-        cy = int(max(0.0, min(1.0, frac[1])) * (h - 1))
-        sw, sh = stamp.get_width(), stamp.get_height()
-        # Clip stamp to frame
-        dw = min(sw, w - cx)
-        dh = min(sh, h - cy)
-        if dw <= 0 or dh <= 0:
-            return out
-        try:
-            # dest_x, dest_y, dest_width, dest_height, offset_x, offset_y,
-            # scale_x, scale_y, interp, overall_alpha
-            stamp.composite(
-                out,
-                cx,
-                cy,
-                dw,
-                dh,
-                float(cx),
-                float(cy),
-                1.0,
-                1.0,
-                GdkPixbuf.InterpType.NEAREST,
-                255,
-            )
-        except Exception:
-            return pb
-        return out
-
     def _render(self) -> None:
+        """Paint stream frame only — cursor is a separate transparent overlay.
+
+        Full-frame pixbuf.copy()+composite on every motion destroyed FPS and
+        left a white/black box when alpha composite failed.
+        """
         pb = self._pixbuf
         if pb is None:
             return
-        # Frontend pointer: composite into frame pixels (bulletproof + cheap)
-        try:
-            pb = self._composite_local_cursor(pb)
-        except Exception:
-            pass
         nw, nh = pb.get_width(), pb.get_height()
         if self._zoom_mode is None:
             self.picture.set_content_fit(Gtk.ContentFit.CONTAIN)

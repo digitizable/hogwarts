@@ -913,6 +913,15 @@ HOGWARTS_CSS = """
 .rdv-cursor-none {
   cursor: none;
 }
+/* Overlay arrow must be transparent — opaque DA bg = white/black box bug */
+.rdv-overlay-cursor {
+  background: none;
+  background-color: transparent;
+  border: none;
+  box-shadow: none;
+  min-width: 18px;
+  min-height: 22px;
+}
 .rdv-statusbar {
   background-color: #007acc;
   padding: 3px 10px;
