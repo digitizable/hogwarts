@@ -2463,7 +2463,7 @@ class HogwartsPage(Gtk.Box):
                         return
                     # Gaming: 4ms paint coalesce; balanced: 8ms
                     prof = str(getattr(self, "_ks_profile", "") or "").lower()
-                    paint_ms = 4 if prof == "gaming" else 8
+                    paint_ms = 2 if prof == "gaming" else 6
                     self._ks_paint_src = GLib.timeout_add(paint_ms, _ks_paint_tick)
 
                 def on_status(msg: str, ok: bool | None) -> None:

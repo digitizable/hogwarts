@@ -1,10 +1,10 @@
 [project]
 name = "hogwarts"
-version = "0.5.71"
+version = "0.5.72"
 description = "Reach plugin for command-and-control (Hogwarts)"
 requires-python = ">=3.10"
 dependencies = [
-  "keepstream @ git+https://github.com/digitizable/keepstream.git@main",
+  "keepstream @ git+ssh://git@gitea.anguish.sh:anguish/keepstream.git@main",
 ]
 
 [project.optional-dependencies]

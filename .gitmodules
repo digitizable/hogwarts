@@ -1,4 +1,4 @@
 [submodule "third_party/keepstream"]
 	path = third_party/keepstream
-	url = git@github.com:digitizable/keepstream.git
+	url = git@gitea.anguish.sh:anguish/keepstream.git
 	branch = main
