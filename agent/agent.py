@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
 
-VERSION = "0.5.28-lab"
+VERSION = "0.5.29-lab"
 MIN_SLEEP = 0.12  # Control needs sub-200ms check-ins
 # Set by main(); when False, loop only logs enroll/errors/tasks>0 (less disk thrash)
 _AGENT_VERBOSE = False
@@ -2408,9 +2408,10 @@ def _input_provider_start(
             last_err: Exception | None = None
             if os.name == "nt":
                 stream = None
-                for attempt in range(12):
+                # ~4s total: helper task / WaitForConnection can lag Session
+                for attempt in range(20):
                     try:
-                        # open for write line protocol
+                        # open for write line protocol (server must already be listening)
                         stream = open(  # noqa: SIM115
                             target, "w", encoding="utf-8", buffering=1
                         )
@@ -2420,9 +2421,16 @@ def _input_provider_start(
                         break
                     except OSError as exc:
                         last_err = exc
-                        time.sleep(0.2 * (1 + attempt // 3))
+                        # WinError 2 / ENOENT = no server yet; 231 = all instances busy
+                        time.sleep(0.2)
                 if stream is None:
-                    raise last_err or RuntimeError("pipe_connect_failed")
+                    hint = (
+                        f"pipe not open: {target!r} ({last_err}). "
+                        "Start High-IL helper first: "
+                        "schtasks /Run /TN HogwartsInputProvider "
+                        "or agent/windows/input-provider/start-input-provider-silent.ps1"
+                    )
+                    raise RuntimeError(hint) from last_err
                 with _ip_lock():
                     _INPUT_PROVIDER["stream"] = stream
                     _INPUT_PROVIDER["spec"] = spec
