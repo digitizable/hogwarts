@@ -32,11 +32,18 @@ With `-AtLogon`, the agent comes up elevated after login with no click.
 
 Do **not** point `input_provider.command` at something that self-elevates (that re-triggers UAC).
 
-Pattern:
+### Shipped lab helper (recommended)
 
-1. Install an elevated helper the same way (Highest task or logon).
-2. Helper listens on a named pipe.
-3. Agent config:
+```powershell
+cd <repo>\agent\windows\input-provider
+# elevated once:
+.\install-input-provider-task.ps1 -AtLogon
+.\start-input-provider-silent.ps1
+```
+
+See `input-provider/README.md`. Protocol: `hogwarts-input/1` on `\\.\pipe\hogwarts-input`.
+
+### agent.json
 
 ```json
 "input_provider": {

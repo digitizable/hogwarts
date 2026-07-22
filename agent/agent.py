@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
 
-VERSION = "0.5.26-lab"
+VERSION = "0.5.27-lab"
 MIN_SLEEP = 0.12  # Control needs sub-200ms check-ins
 # Set by main(); when False, loop only logs enroll/errors/tasks>0 (less disk thrash)
 _AGENT_VERBOSE = False
@@ -2110,11 +2110,15 @@ def _session_start(payload: dict[str, Any]) -> dict[str, Any]:
         "PIL fallback if ffmpeg missing. Latest-frame drop under load."
     )
     if ip_status.get("active"):
-        note += " input_provider active (user plug-in)."
+        kind = str(ip_status.get("kind") or "provider")
+        note += f" input_provider active ({kind})."
+    elif elev is True:
+        note += " agent elevated — local inject can drive High UI."
     elif elev is False:
         note += (
             " Windows: agent is NOT elevated — Task Manager / UAC apps block "
-            "input (UIPI). Set input_provider to your own helper, or elevate."
+            "input (UIPI). Prefer agent/windows/input-provider (pipe helper + "
+            "Highest task) or elevate the agent (install-elevated-task.ps1)."
         )
     out: dict[str, Any] = {
         "started": True,

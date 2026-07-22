@@ -61,5 +61,6 @@ Path SOCKS (Spike 2): Connect Reach path first; Session dial notes **via path SO
 ## Related
 
 - Elevated / silent helpers: `install-elevated-task.ps1`, `start-agent-silent.ps1`
+- High-IL **input provider** (pipe + SendInput): `input-provider/` (install once, no daily UAC)
 - Privilege research: `privilege-engine/`
 - Keepstream wire: Anguish notes `research/keepstream-v0`

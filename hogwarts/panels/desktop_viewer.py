@@ -709,7 +709,7 @@ class RemoteDesktopViewer(Gtk.Window):
         srow.append(self.btn_copy_vnc)
         session.append(srow)
 
-        # Optional plug-in: operator-supplied elevated input helper (not shipped)
+        # Optional plug-in: High-IL inject helper (lab: agent/windows/input-provider)
         ip_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         ip_box.set_margin_top(10)
         ip_title = Gtk.Label(label="Custom input provider (optional)", xalign=0)
@@ -717,11 +717,12 @@ class RemoteDesktopViewer(Gtk.Window):
         ip_box.append(ip_title)
         ip_hint = Gtk.Label(
             label=(
-                "Path to your own elevated-input helper (optional). Leave empty "
-                "for built-in inject. Prefer a helper already running elevated "
-                "(named pipe) so Session does not trigger UAC Yes/No. "
-                "Self-elevating exec will prompt every start — use a Highest "
-                "scheduled task once, then silent start (see agent/windows/)."
+                "For Task Manager / admin UI when the agent is not elevated: run "
+                "agent/windows/input-provider (Highest scheduled task once) and "
+                "set agent.json input_provider kind=pipe to "
+                "\\\\.\\pipe\\hogwarts-input — or enter an exec path here. "
+                "Leave empty for built-in inject. Do not self-elevate on each "
+                "Session start (that re-triggers UAC)."
             ),
             xalign=0,
             wrap=True,
