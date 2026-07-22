@@ -38,7 +38,9 @@ Scripts are **ASCII-only** (avoid en-dashes in comments on WinPS 5.1).
 }
 ```
 
-Requires agent **≥ 0.5.30-lab** (opens the pipe with `CreateFileW` / `WaitNamedPipeW`). Older agents used CPython `open()`, which can return **ENOENT** even when .NET `NamedPipeClientStream` connects successfully.
+Requires agent **≥ 0.5.31-lab** (CreateFileW duplex + byte mode; helper server is **In**-only so HELLO write does not hang). Older agents: CPython `open()` ENOENT, or write-only CreateFile hang vs InOut PS servers.
+
+**Supported fallback:** `kind=exec` + a small bridge that uses .NET `NamedPipeClientStream` is fine if native pipe misbehaves on a host.
 
 Or Remote Viewer → Session → **Use provider** / **Default pipe**.
 

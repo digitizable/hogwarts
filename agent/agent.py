@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
 
-VERSION = "0.5.30-lab"
+VERSION = "0.5.31-lab"
 MIN_SLEEP = 0.12  # Control needs sub-200ms check-ins
 # Set by main(); when False, loop only logs enroll/errors/tasks>0 (less disk thrash)
 _AGENT_VERBOSE = False
@@ -2507,8 +2507,9 @@ def _input_provider_start(
 def _win_open_named_pipe_write(target: str, *, timeout_s: float = 6.0):
     """Open a Windows named pipe for line writes (input_provider client).
 
-    Uses WaitNamedPipeW + CreateFileW when available; falls back to open().
-    Returns a text write stream or None on timeout/failure.
+    Uses WaitNamedPipeW + CreateFileW (R+W duplex — write-only clients can
+    hang on WriteFile against some .NET/PS pipe servers). Falls back to open().
+    Returns a binary-friendly text write stream or None on timeout/failure.
     """
     if os.name != "nt":
         return None
@@ -2536,19 +2537,30 @@ def _win_open_named_pipe_write(target: str, *, timeout_s: float = 6.0):
             wintypes.HANDLE,
         ]
         CreateFileW.restype = wintypes.HANDLE
-        CloseHandle = kernel32.CloseHandle
+        SetNamedPipeHandleState = kernel32.SetNamedPipeHandleState
+        SetNamedPipeHandleState.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(wintypes.DWORD),
+            ctypes.POINTER(wintypes.DWORD),
+            ctypes.POINTER(wintypes.DWORD),
+        ]
+        SetNamedPipeHandleState.restype = wintypes.BOOL
+        GENERIC_READ = 0x80000000
         GENERIC_WRITE = 0x40000000
         OPEN_EXISTING = 3
         FILE_ATTRIBUTE_NORMAL = 0x80
+        PIPE_READMODE_BYTE = 0x00000000
         INVALID = ctypes.c_void_p(-1).value
 
         while time.monotonic() < deadline:
             try:
                 # Wait up to 500ms per loop for a free pipe instance
                 WaitNamedPipeW(target, 500)
+                # Duplex access: GENERIC_WRITE-only clients hang writing HELLO
+                # against PowerShell NamedPipeServerStream (InOut) on some hosts.
                 handle = CreateFileW(
                     target,
-                    GENERIC_WRITE,
+                    GENERIC_READ | GENERIC_WRITE,
                     0,
                     None,
                     OPEN_EXISTING,
@@ -2560,9 +2572,39 @@ def _win_open_named_pipe_write(target: str, *, timeout_s: float = 6.0):
                     last = OSError(err, f"CreateFileW failed winerr={err}")
                     time.sleep(0.15)
                     continue
-                fd = msvcrt.open_osfhandle(int(handle), os.O_WRONLY)
-                # fd owns the handle now
-                return open(fd, "w", encoding="utf-8", buffering=1)  # noqa: SIM115
+                mode = wintypes.DWORD(PIPE_READMODE_BYTE)
+                try:
+                    SetNamedPipeHandleState(handle, ctypes.byref(mode), None, None)
+                except Exception:
+                    pass
+                # O_RDWR so write path is not half-open against duplex servers
+                fd = msvcrt.open_osfhandle(int(handle), os.O_RDWR)
+                # Unbuffered binary-backed text wrapper — avoid flush stalls
+                raw = open(fd, "rb+", buffering=0)  # noqa: SIM115
+
+                class _PipeText:
+                    def __init__(self, r: Any) -> None:
+                        self._r = r
+
+                    def write(self, s: str) -> int:
+                        data = s.encode("utf-8") if isinstance(s, str) else s
+                        # WriteFile in chunks; do not hold GIL forever on hang
+                        self._r.write(data)
+                        return len(data)
+
+                    def flush(self) -> None:
+                        try:
+                            self._r.flush()
+                        except Exception:
+                            pass
+
+                    def close(self) -> None:
+                        try:
+                            self._r.close()
+                        except Exception:
+                            pass
+
+                return _PipeText(raw)
             except OSError as exc:
                 last = exc
                 time.sleep(0.15)
@@ -2572,7 +2614,7 @@ def _win_open_named_pipe_write(target: str, *, timeout_s: float = 6.0):
     except Exception as exc:
         last = exc  # type: ignore[assignment]
 
-    # Fallback: builtin open() with short retries
+    # Fallback: builtin open() with short retries (often ENOENT on this host)
     while time.monotonic() < deadline:
         try:
             return open(target, "w", encoding="utf-8", buffering=1)  # noqa: SIM115

@@ -208,9 +208,8 @@ function Invoke-Events($obj) {
 }
 
 function Handle-Client([System.IO.Pipes.NamedPipeServerStream]$pipe) {
-    $reader = New-Object System.IO.StreamReader($pipe, [Text.Encoding]::UTF8, $false, 1024, $true)
-    $writer = New-Object System.IO.StreamWriter($pipe, [Text.Encoding]::UTF8, 1024, $true)
-    $writer.AutoFlush = $true
+    # Server is In-only: read HELLO + event lines; HELLO_OK is optional for agents.
+    $reader = New-Object System.IO.StreamReader($pipe, [Text.Encoding]::UTF8, $false, 4096, $true)
     $hello = $reader.ReadLine()
     if (-not $hello) { return }
     $parts = $hello.Trim() -split "\s+"
@@ -218,7 +217,6 @@ function Handle-Client([System.IO.Pipes.NamedPipeServerStream]$pipe) {
         Write-Log "bad hello: $hello"
         return
     }
-    $writer.WriteLine("HELLO_OK")
     Write-Log "client HELLO ok session=$($parts[2])"
     while ($true) {
         $line = $reader.ReadLine()
@@ -243,12 +241,16 @@ Write-Log "listening \\\\.\\pipe\\$PipeName (elevated inject helper — not a UA
 while ($true) {
     $pipe = $null
     try {
+        # In-only: clients write HELLO/events; we do not require duplex open.
+        # (Write-only CreateFile clients hang against some InOut servers.)
         $pipe = New-Object System.IO.Pipes.NamedPipeServerStream(
             $PipeName,
-            [System.IO.Pipes.PipeDirection]::InOut,
-            1,
+            [System.IO.Pipes.PipeDirection]::In,
+            4,
             [System.IO.Pipes.PipeTransmissionMode]::Byte,
-            [System.IO.Pipes.PipeOptions]::Asynchronous
+            [System.IO.Pipes.PipeOptions]::None,
+            4096,
+            4096
         )
         $pipe.WaitForConnection()
         Write-Log "client connected"
