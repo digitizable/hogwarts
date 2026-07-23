@@ -2580,11 +2580,25 @@ class HogwartsPage(Gtk.Box):
                     return True
 
                 def on_frame(_data: bytes, _meta: dict) -> None:
-                    # Ensure paint pump is running (idempotent)
+                    # Ensure paint pump is running (idempotent).
+                    # 4ms ≈ 250 Hz pull — lower avg paint lag vs 8ms without
+                    # full idle_add storm; still latest-frame-only.
                     if getattr(self, "_ks_paint_src", None) is not None:
                         return
-                    # 8ms ≈ 125 Hz pull; still latest-frame-only (drops intermediates)
-                    self._ks_paint_src = GLib.timeout_add(8, _ks_paint_tick)
+                    self._ks_paint_src = GLib.timeout_add(4, _ks_paint_tick)
+                    # Also schedule an immediate idle paint of whatever is latest
+                    # (cuts one poll period of glass after first frame).
+                    def _kick() -> bool:
+                        try:
+                            _ks_paint_tick()
+                        except Exception:
+                            pass
+                        return False
+
+                    try:
+                        GLib.idle_add(_kick)
+                    except Exception:
+                        pass
 
                 def on_status(msg: str, ok: bool | None) -> None:
                     def ui() -> bool:
