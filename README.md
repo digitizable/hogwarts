@@ -72,9 +72,9 @@ Restart Reach after syncing.
 
 ---
 
-## Control plane (lab)
+## Control plane (local)
 
-For development only (`PLANE_OPERATOR_TOKEN=dev` is a lab default, not for production):
+For local development (`PLANE_OPERATOR_TOKEN=dev` is not a production secret):
 
 ```bash
 # terminal 1 — mock plane
@@ -120,9 +120,8 @@ lab/                  # Docker / smoke helpers
 ## Security
 
 - Install only from sources you trust. Plugins run in-process with Reach.
-- Use for systems and engagements you are authorized to control.
 - Prefer an active Reach path before agent work (see path gate above).
-- Lab tokens (`dev`) and open enroll secrets are for local testing only.
+- Tokens (`dev`) and open enroll secrets are for local testing only.
 
 ---
 
